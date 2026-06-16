@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { auth, provider, db } from "./firebase";
+import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 
 const C = {
   bg: "#0e0e1a",
@@ -12,8 +15,6 @@ const C = {
   text: "#e8e8f0",
   muted: "#7878a0",
 };
-
-const SKEY = "mahjong-league-v1";
 
 const defaultCfg = {
   uma: [15, 5, -5, -15],
@@ -54,82 +55,343 @@ export default function App() {
   const [games, setGames] = useState([]);
   const [cfg, setCfg] = useState(defaultCfg);
 
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [displayName, setDisplayName] = useState("");
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [leagueReady, setLeagueReady] = useState(false);
+
   useEffect(() => {
-    const saved = localStorage.getItem(SKEY);
-    if (saved) {
-      const data = JSON.parse(saved);
-      setPlayers(data.players || []);
-      setGames(data.games || []);
-      setCfg(data.cfg || defaultCfg);
-    }
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthReady(true);
+      setProfile(null);
+      setDisplayName("");
+      setLeagueReady(false);
+      setPlayers([]);
+      setGames([]);
+      setCfg(defaultCfg);
+    });
+
+    return () => unsub();
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(SKEY, JSON.stringify({ players, games, cfg }));
-  }, [players, games, cfg]);
+    if (!user) return;
+
+    async function loadProfile() {
+      setProfileLoading(true);
+
+      const ref = doc(db, "users", user.uid);
+      const snap = await getDoc(ref);
+
+      if (snap.exists()) {
+        setProfile(snap.data());
+      } else {
+        setProfile(null);
+      }
+
+      setProfileLoading(false);
+    }
+
+    loadProfile();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !profile) return;
+
+    async function loadLeagueData() {
+      setLeagueReady(false);
+
+      const ref = doc(db, "users", user.uid, "data", "league");
+      const snap = await getDoc(ref);
+
+      if (snap.exists()) {
+        const data = snap.data();
+        setPlayers(data.players || []);
+        setGames(data.games || []);
+        setCfg(data.cfg || defaultCfg);
+      } else {
+        setPlayers([]);
+        setGames([]);
+        setCfg(defaultCfg);
+      }
+
+      setLeagueReady(true);
+    }
+
+    loadLeagueData();
+  }, [user, profile]);
+
+  useEffect(() => {
+    if (!user || !profile || !leagueReady) return;
+
+    async function saveLeagueData() {
+      const ref = doc(db, "users", user.uid, "data", "league");
+
+      await setDoc(ref, {
+        players,
+        games,
+        cfg,
+        updatedAt: Date.now(),
+      });
+    }
+
+    saveLeagueData();
+  }, [players, games, cfg, user, profile, leagueReady]);
+
+  async function saveProfile() {
+    if (!user) return;
+    if (!displayName.trim()) {
+      alert("ユーザー名を入力してください。");
+      return;
+    }
+
+    const newProfile = {
+      displayName: displayName.trim(),
+      email: user.email,
+      uid: user.uid,
+      createdAt: Date.now(),
+    };
+
+    await setDoc(doc(db, "users", user.uid), newProfile);
+    setProfile(newProfile);
+  }
+
+  if (!authReady) {
+    return (
+      <>
+        <BaseStyle />
+        <div style={appBgStyle}>
+          <div style={pageStyle}>
+            <Header />
+            <Card>
+              <p style={{ color: C.muted, textAlign: "center", padding: 20 }}>
+                読み込み中...
+              </p>
+            </Card>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
-      <style>{`
-        *{box-sizing:border-box;margin:0;padding:0;}
-        body{background:${C.bg};color:${C.text};font-family:system-ui,'Noto Sans JP',sans-serif;}
-        input{font-size:16px;}
-        button{font-family:inherit;}
-      `}</style>
+      <BaseStyle />
 
-      <div style={{ maxWidth: 460, margin: "0 auto", padding: "18px 14px 80px" }}>
-        <header style={{ textAlign: "center", marginBottom: 18 }}>
-          <div style={{ fontSize: 26, color: C.gold, fontWeight: 700 }}>
-            🀄 麻雀リーグ
-          </div>
-          <div style={{ fontSize: 11, color: C.muted, letterSpacing: 2 }}>
-            MAHJONG LEAGUE TRACKER
-          </div>
-        </header>
+      <div style={appBgStyle}>
+        <div style={pageStyle}>
+          <Header />
 
-        <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-          {[
-            ["record", "記録"],
-            ["history", "履歴"],
-            ["stats", "成績"],
-            ["settings", "設定"],
-          ].map(([k, v]) => (
-            <button
-              key={k}
-              onClick={() => setTab(k)}
-              style={{
-                flex: 1,
-                padding: "9px 0",
-                borderRadius: 8,
-                border: `1px solid ${tab === k ? C.accent : C.border}`,
-                background: tab === k ? C.panel : C.surface,
-                color: tab === k ? C.text : C.muted,
-                cursor: "pointer",
-              }}
-            >
-              {v}
-            </button>
-          ))}
+          {!user ? (
+            <LoginScreen />
+          ) : profileLoading ? (
+            <Card>
+              <p style={{ color: C.muted, textAlign: "center", padding: 20 }}>
+                プロフィール確認中...
+              </p>
+            </Card>
+          ) : !profile ? (
+            <ProfileSetup
+              user={user}
+              displayName={displayName}
+              setDisplayName={setDisplayName}
+              saveProfile={saveProfile}
+            />
+          ) : !leagueReady ? (
+            <Card>
+              <p style={{ color: C.muted, textAlign: "center", padding: 20 }}>
+                データ読み込み中...
+              </p>
+            </Card>
+          ) : (
+            <>
+              <Card>
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>
+                    ログイン中
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 18,
+                      color: C.gold,
+                      fontWeight: 700,
+                      marginBottom: 4,
+                    }}
+                  >
+                    {profile.displayName}
+                  </div>
+                  <div style={{ fontSize: 12, color: C.green, marginBottom: 12 }}>
+                    {user.email}
+                  </div>
+                  <button onClick={() => signOut(auth)} style={loginBtnStyle}>
+                    ログアウト
+                  </button>
+                </div>
+              </Card>
+
+              <div style={tabGridStyle}>
+                {[
+                  ["record", "記録"],
+                  ["history", "履歴"],
+                  ["stats", "成績"],
+                  ["settings", "設定"],
+                ].map(([k, v]) => (
+                  <button
+                    key={k}
+                    onClick={() => setTab(k)}
+                    style={{
+                      padding: "9px 0",
+                      borderRadius: 8,
+                      border: `1px solid ${tab === k ? C.accent : C.border}`,
+                      background: tab === k ? C.panel : C.surface,
+                      color: tab === k ? C.text : C.muted,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+
+              {tab === "record" && (
+                <RecordTab
+                  players={players}
+                  games={games}
+                  setGames={setGames}
+                  cfg={cfg}
+                />
+              )}
+
+              {tab === "history" && (
+                <HistoryTab
+                  players={players}
+                  games={games}
+                  setGames={setGames}
+                />
+              )}
+
+              {tab === "stats" && <StatsTab players={players} games={games} />}
+
+              {tab === "settings" && (
+                <SettingsTab
+                  players={players}
+                  setPlayers={setPlayers}
+                  cfg={cfg}
+                  setCfg={setCfg}
+                  setGames={setGames}
+                />
+              )}
+            </>
+          )}
         </div>
-
-        {tab === "record" && (
-          <RecordTab players={players} games={games} setGames={setGames} cfg={cfg} />
-        )}
-        {tab === "history" && (
-          <HistoryTab players={players} games={games} setGames={setGames} />
-        )}
-        {tab === "stats" && <StatsTab players={players} games={games} />}
-        {tab === "settings" && (
-          <SettingsTab
-            players={players}
-            setPlayers={setPlayers}
-            cfg={cfg}
-            setCfg={setCfg}
-            setGames={setGames}
-          />
-        )}
       </div>
     </>
+  );
+}
+
+function BaseStyle() {
+  return (
+    <style>{`
+      *{box-sizing:border-box;margin:0;padding:0;}
+      html, body, #root {
+        width:100%;
+        min-height:100vh;
+        background:${C.bg};
+      }
+      body{
+        overflow-x:hidden;
+        color:${C.text};
+        font-family:system-ui,'Noto Sans JP',sans-serif;
+      }
+      input{font-size:16px;}
+      button{font-family:inherit;}
+    `}</style>
+  );
+}
+
+function Header() {
+  return (
+    <header style={{ textAlign: "center", marginBottom: 18 }}>
+      <div style={{ fontSize: 26, color: C.gold, fontWeight: 700 }}>
+        🀄 麻雀リーグ
+      </div>
+      <div style={{ fontSize: 11, color: C.muted, letterSpacing: 2 }}>
+        MAHJONG LEAGUE TRACKER
+      </div>
+    </header>
+  );
+}
+
+function LoginScreen() {
+  return (
+    <Card>
+      <div style={{ textAlign: "center", padding: "18px 0" }}>
+        <div
+          style={{
+            fontSize: 22,
+            fontWeight: 700,
+            color: C.gold,
+            marginBottom: 8,
+          }}
+        >
+          ログイン
+        </div>
+        <div
+          style={{
+            fontSize: 13,
+            color: C.muted,
+            marginBottom: 18,
+            lineHeight: 1.7,
+          }}
+        >
+          麻雀リーグを利用するにはGoogleログインが必要です。
+          <br />
+          ログイン後に記録・履歴・成績・設定を利用できます。
+        </div>
+        <button onClick={() => signInWithPopup(auth, provider)} style={googleBtnStyle}>
+          Googleでログイン
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function ProfileSetup({ user, displayName, setDisplayName, saveProfile }) {
+  return (
+    <Card>
+      <div style={{ textAlign: "center", padding: "18px 0" }}>
+        <div
+          style={{
+            fontSize: 22,
+            fontWeight: 700,
+            color: C.gold,
+            marginBottom: 8,
+          }}
+        >
+          ユーザー名登録
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>
+          表示用のユーザー名を決めてください。
+        </div>
+        <div style={{ fontSize: 11, color: C.green, marginBottom: 12 }}>
+          {user.email}
+        </div>
+
+        <input
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          placeholder="例：麻雀太郎"
+          style={{ ...inputStyle, marginBottom: 12 }}
+        />
+
+        <button onClick={saveProfile} style={googleBtnStyle}>
+          登録して始める
+        </button>
+      </div>
+    </Card>
   );
 }
 
@@ -179,6 +441,7 @@ function RecordTab({ players, games, setGames, cfg }) {
       date: new Date().toLocaleString("ja-JP"),
       entries: preview,
     };
+
     setGames([game, ...games]);
     setSelected([]);
     setScores({});
@@ -307,6 +570,7 @@ function HistoryTab({ players, games, setGames }) {
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>
             {g.date}
           </div>
+
           {[...g.entries]
             .sort((a, b) => a.rank - b.rank)
             .map((e) => {
@@ -321,6 +585,7 @@ function HistoryTab({ players, games, setGames }) {
                 />
               );
             })}
+
           <button
             onClick={() => setGames(games.filter((x) => x.id !== g.id))}
             style={{
@@ -349,6 +614,7 @@ function StatsTab({ players, games }) {
         const entries = games.flatMap((g) =>
           g.entries.filter((e) => e.playerId === p.id)
         );
+
         const n = entries.length;
         const totalPt = entries.reduce((a, e) => a + e.pt, 0);
         const wins = entries.filter((e) => e.rank === 0).length;
@@ -394,8 +660,8 @@ function StatsTab({ players, games }) {
                 {i + 1}位　{s.name}
               </div>
               <div style={{ fontSize: 11, color: C.muted }}>
-                {s.n}半荘 / 平均順位 {s.avgRank} / トップ率 {s.topRate}% / 四着率{" "}
-                {s.lastRate}%
+                {s.n}半荘 / 平均順位 {s.avgRank} / トップ率 {s.topRate}% /
+                四着率 {s.lastRate}%
               </div>
             </div>
             <div
@@ -510,9 +776,7 @@ function SettingsTab({ players, setPlayers, cfg, setCfg, setGames }) {
           <input
             type="number"
             value={cfg.returnPt}
-            onChange={(e) =>
-              setCfg({ ...cfg, returnPt: Number(e.target.value) })
-            }
+            onChange={(e) => setCfg({ ...cfg, returnPt: Number(e.target.value) })}
             style={inputStyle}
           />
         </div>
@@ -525,7 +789,7 @@ function SettingsTab({ players, setPlayers, cfg, setCfg, setGames }) {
             if (confirm("全データを削除しますか？")) {
               setPlayers([]);
               setGames([]);
-              localStorage.removeItem(SKEY);
+              setCfg(defaultCfg);
             }
           }}
           style={{
@@ -549,6 +813,7 @@ function Card({ children }) {
   return (
     <div
       style={{
+        width: "100%",
         background: C.surface,
         border: `1px solid ${C.border}`,
         borderRadius: 12,
@@ -629,6 +894,25 @@ function ResultRow({ rank, name, score, pt }) {
   );
 }
 
+const appBgStyle = {
+  minHeight: "100vh",
+  background: C.bg,
+};
+
+const pageStyle = {
+  width: "100%",
+  maxWidth: 430,
+  margin: "0 auto",
+  padding: "18px 14px 40px",
+};
+
+const tabGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(4, 1fr)",
+  gap: 6,
+  marginBottom: 16,
+};
+
 const inputStyle = {
   flex: 1,
   width: "100%",
@@ -637,4 +921,26 @@ const inputStyle = {
   border: `1px solid ${C.border}`,
   background: "#0a0a16",
   color: C.text,
+};
+
+const loginBtnStyle = {
+  width: "100%",
+  padding: 11,
+  borderRadius: 8,
+  border: `1px solid ${C.border}`,
+  background: C.panel,
+  color: C.text,
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const googleBtnStyle = {
+  width: "100%",
+  padding: 12,
+  borderRadius: 8,
+  border: `1px solid ${C.gold}`,
+  background: "#20180a",
+  color: C.gold,
+  cursor: "pointer",
+  fontWeight: 700,
 };
