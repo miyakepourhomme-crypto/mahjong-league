@@ -24,8 +24,8 @@ const C = {
 };
 
 const defaultCfg = {
-  uma: [15, 5, -5, -15],
-  oka: 30,
+  uma: [30, 10, -10, -30],
+  oka: 20,
   returnPt: 30000,
 };
 
@@ -732,12 +732,17 @@ export default function App() {
     ? `${window.location.origin}${window.location.pathname}?league=${activeLeagueId}`
     : "";
 
+  const mainPanelClassName =
+    tab === "record" || tab === "stats" || tab === "playerDetail"
+      ? "desktop-main desktop-main-wide"
+      : "desktop-main";
+
   if (!authReady) {
     return (
       <>
         <BaseStyle />
         <div style={appBgStyle}>
-          <div style={pageStyle}>
+          <div className="app-page">
             <Header />
             <Card>
               <p style={centerMutedStyle}>読み込み中...</p>
@@ -753,7 +758,7 @@ export default function App() {
       <BaseStyle />
 
       <div style={appBgStyle}>
-        <div style={pageStyle}>
+        <div className={activeLeagueId ? "app-page app-page-wide" : "app-page"}>
           <Header />
 
           {!user ? (
@@ -786,105 +791,94 @@ export default function App() {
               <LeagueSetup createLeague={createLeague} />
             </>
           ) : (
-            <>
-              <UserCard profile={profile} user={user} canAdmin={canAdmin} />
+            <div className="desktop-shell">
+              <aside className="desktop-sidebar">
+                <UserCard profile={profile} user={user} canAdmin={canAdmin} />
 
-              {leagueError && (
-                <Card>
-                  <p style={errorTextStyle}>{leagueError}</p>
-                </Card>
-              )}
+                {leagueError && (
+                  <Card>
+                    <p style={errorTextStyle}>{leagueError}</p>
+                  </Card>
+                )}
 
-              <LeagueInfo
-                leagueName={leagueName}
-                activeLeagueId={activeLeagueId}
-                memberCount={leagueMemberUids.length}
-                inviteUrl={inviteUrl}
-                canAdmin={canAdmin}
-              />
-
-              <div style={tabGridStyle}>
-                {tabs.map(([k, v]) => (
-                  <button
-                    key={k}
-                    onClick={() => {
-                      setTab(k);
-                      if (k !== "playerDetail") setSelectedPlayerId("");
-                    }}
-                    style={{
-                      padding: "9px 0",
-                      borderRadius: 8,
-                      border: `1px solid ${tab === k ? C.accent : C.border}`,
-                      background: tab === k ? C.panel : C.surface,
-                      color: tab === k ? C.text : C.muted,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-
-              {tab === "record" && (
-                <RecordTab
-                  players={players}
-                  saveGameToLeague={saveGameToLeague}
-                  cfg={cfg}
-                  canSaveGame={canMember}
-                />
-              )}
-
-              {tab === "history" && (
-                <HistoryTab
-                  players={players}
-                  games={games}
-                  cfg={cfg}
-                  updateGameInLeague={updateGameInLeague}
-                  deleteGame={deleteGame}
+                <LeagueInfo
+                  leagueName={leagueName}
+                  activeLeagueId={activeLeagueId}
+                  memberCount={leagueMemberUids.length}
+                  inviteUrl={inviteUrl}
                   canAdmin={canAdmin}
                 />
-              )}
 
-              {tab === "stats" && (
-                <StatsTab
-                  players={players}
-                  games={games}
-                  openPlayerDetail={(playerId) => {
-                    setSelectedPlayerId(playerId);
-                    setTab("playerDetail");
-                  }}
+                <TabNav
+                  tabs={tabs}
+                  tab={tab}
+                  setTab={setTab}
+                  clearSelectedPlayer={() => setSelectedPlayerId("")}
                 />
-              )}
+              </aside>
 
-              {tab === "playerDetail" && (
-                <PlayerDetailTab
-                  playerId={selectedPlayerId}
-                  players={players}
-                  games={games}
-                  goBack={() => {
-                    setSelectedPlayerId("");
-                    setTab("stats");
-                  }}
-                />
-              )}
+              <main className={mainPanelClassName}>
+                {tab === "record" && (
+                  <RecordTab
+                    players={players}
+                    saveGameToLeague={saveGameToLeague}
+                    cfg={cfg}
+                    canSaveGame={canMember}
+                  />
+                )}
 
-              {tab === "settings" && canAdmin && (
-                <SettingsTab
-                  players={players}
-                  savePlayersToDb={savePlayersToDb}
-                  cfg={cfg}
-                  saveCfgToDb={saveCfgToDb}
-                  leagueName={leagueName}
-                  saveLeagueNameToDb={saveLeagueNameToDb}
-                  leagueOwnerUid={leagueOwnerUid}
-                  leagueAdminUids={leagueAdminUids}
-                  memberProfiles={memberProfiles}
-                  setAdminStatus={setAdminStatus}
-                  resetLeagueData={resetLeagueData}
-                  user={user}
-                />
-              )}
-            </>
+                {tab === "history" && (
+                  <HistoryTab
+                    players={players}
+                    games={games}
+                    cfg={cfg}
+                    updateGameInLeague={updateGameInLeague}
+                    deleteGame={deleteGame}
+                    canAdmin={canAdmin}
+                  />
+                )}
+
+                {tab === "stats" && (
+                  <StatsTab
+                    players={players}
+                    games={games}
+                    openPlayerDetail={(playerId) => {
+                      setSelectedPlayerId(playerId);
+                      setTab("playerDetail");
+                    }}
+                  />
+                )}
+
+                {tab === "playerDetail" && (
+                  <PlayerDetailTab
+                    playerId={selectedPlayerId}
+                    players={players}
+                    games={games}
+                    goBack={() => {
+                      setSelectedPlayerId("");
+                      setTab("stats");
+                    }}
+                  />
+                )}
+
+                {tab === "settings" && canAdmin && (
+                  <SettingsTab
+                    players={players}
+                    savePlayersToDb={savePlayersToDb}
+                    cfg={cfg}
+                    saveCfgToDb={saveCfgToDb}
+                    leagueName={leagueName}
+                    saveLeagueNameToDb={saveLeagueNameToDb}
+                    leagueOwnerUid={leagueOwnerUid}
+                    leagueAdminUids={leagueAdminUids}
+                    memberProfiles={memberProfiles}
+                    setAdminStatus={setAdminStatus}
+                    resetLeagueData={resetLeagueData}
+                    user={user}
+                  />
+                )}
+              </main>
+            </div>
           )}
         </div>
       </div>
@@ -908,6 +902,115 @@ function BaseStyle() {
       }
       input{font-size:16px;}
       button{font-family:inherit;}
+
+      .app-page{
+        width:100%;
+        max-width:430px;
+        margin:0 auto;
+        padding:18px 14px 40px;
+      }
+
+      .desktop-shell{
+        width:100%;
+      }
+
+      .desktop-sidebar,
+      .desktop-main{
+        width:100%;
+      }
+
+      .score-input-row{
+        display:flex;
+        gap:8px;
+        margin-bottom:8px;
+      }
+
+      .score-input-label{
+        width:80px;
+        color:${C.muted};
+        padding-top:9px;
+        flex:none;
+      }
+
+      .record-player-list{
+        display:flex;
+        flex-wrap:wrap;
+        gap:8px;
+      }
+
+      @media (min-width: 900px){
+        .app-page.app-page-wide{
+          max-width:1180px;
+          padding:24px 28px 60px;
+        }
+
+        .app-page.app-page-wide header{
+          margin-bottom:24px;
+        }
+
+        .desktop-shell{
+          display:grid;
+          grid-template-columns:340px minmax(0, 760px);
+          gap:24px;
+          align-items:start;
+          justify-content:center;
+        }
+
+        .desktop-sidebar{
+          position:sticky;
+          top:24px;
+        }
+
+        .desktop-main{
+          min-width:0;
+        }
+
+        .desktop-main-wide{
+          max-width:760px;
+        }
+
+        .record-player-list{
+          gap:10px;
+        }
+
+        .record-player-list button{
+          padding:10px 18px !important;
+        }
+
+        .score-input-row{
+          display:grid;
+          grid-template-columns:110px minmax(0, 1fr);
+          align-items:center;
+          gap:12px;
+          margin-bottom:12px;
+        }
+
+        .score-input-label{
+          width:auto;
+          padding-top:0;
+          font-size:15px;
+        }
+
+        .score-input-row input{
+          padding:12px 14px !important;
+          font-size:18px;
+        }
+      }
+
+      @media (min-width: 1200px){
+        .app-page.app-page-wide{
+          max-width:1260px;
+        }
+
+        .desktop-shell{
+          grid-template-columns:360px minmax(0, 840px);
+          gap:28px;
+        }
+
+        .desktop-main-wide{
+          max-width:840px;
+        }
+      }
     `}</style>
   );
 }
@@ -1071,6 +1174,32 @@ function LeagueInfo({ leagueName, activeLeagueId, memberCount, inviteUrl, canAdm
   );
 }
 
+function TabNav({ tabs, tab, setTab, clearSelectedPlayer }) {
+  return (
+    <div style={tabGridStyle}>
+      {tabs.map(([k, v]) => (
+        <button
+          key={k}
+          onClick={() => {
+            setTab(k);
+            if (k !== "playerDetail") clearSelectedPlayer();
+          }}
+          style={{
+            padding: "9px 0",
+            borderRadius: 8,
+            border: `1px solid ${tab === k ? C.accent : C.border}`,
+            background: tab === k ? C.panel : C.surface,
+            color: tab === k ? C.text : C.muted,
+            cursor: "pointer",
+          }}
+        >
+          {v}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function RecordTab({ players, saveGameToLeague, cfg, canSaveGame }) {
   const activePlayers = useMemo(
     () => players.filter((p) => !p.hidden),
@@ -1147,7 +1276,7 @@ function RecordTab({ players, saveGameToLeague, cfg, canSaveGame }) {
     <>
       <Card>
         <Label>参加者選択（{selected.length}/4）</Label>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <div className="record-player-list">
           {activePlayers.map((p) => {
             const active = selected.includes(p.id);
             return (
@@ -1171,17 +1300,18 @@ function RecordTab({ players, saveGameToLeague, cfg, canSaveGame }) {
       </Card>
 
       {selected.length === 4 && (
-        <Card>
+        <Card className="record-score-card">
           <Label>点数入力</Label>
           {selected.map((id) => {
             const p = players.find((x) => x.id === id);
             return (
-              <div key={id} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                <div style={{ width: 80, color: C.muted, paddingTop: 9 }}>
+              <div key={id} className="score-input-row">
+                <div className="score-input-label">
                   {p?.name}
                 </div>
                 <input
                   type="number"
+                  step="100"
                   placeholder="32000"
                   value={scores[id] || ""}
                   onChange={(e) => {
@@ -1393,12 +1523,13 @@ function EditGameForm({ game, players, cfg, onCancel, onSave }) {
       {game.entries.map((e) => {
         const p = players.find((x) => x.id === e.playerId);
         return (
-          <div key={e.playerId} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-            <div style={{ width: 80, color: C.muted, paddingTop: 9 }}>
+          <div key={e.playerId} className="score-input-row">
+            <div className="score-input-label">
               {p?.name || "不明"}
             </div>
             <input
               type="number"
+              step="100"
               value={scores[e.playerId] || ""}
               onChange={(ev) =>
                 setScores({ ...scores, [e.playerId]: ev.target.value })
@@ -1965,9 +2096,10 @@ function SettingsTab({
   );
 }
 
-function Card({ children }) {
+function Card({ children, className = "" }) {
   return (
     <div
+      className={className}
       style={{
         width: "100%",
         background: C.surface,
