@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { auth, provider, db } from "./firebase";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { arrayUnion, doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
 
 const C = {
   bg: "#0e0e1a",
@@ -23,7 +23,7 @@ const defaultCfg = {
 };
 
 function uid() {
-  return Math.random().toString(36).slice(2, 9);
+  return Math.random().toString(36).slice(2, 11);
 }
 
 function fmtPt(n) {
@@ -60,15 +60,30 @@ export default function App() {
   const [profile, setProfile] = useState(null);
   const [displayName, setDisplayName] = useState("");
   const [profileLoading, setProfileLoading] = useState(false);
+
+  const [activeLeagueId, setActiveLeagueId] = useState("");
+  const [leagueName, setLeagueName] = useState("");
+  const [leagueOwnerUid, setLeagueOwnerUid] = useState("");
+  const [leagueMemberUids, setLeagueMemberUids] = useState([]);
   const [leagueReady, setLeagueReady] = useState(false);
+  const [leagueError, setLeagueError] = useState("");
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthReady(true);
+
       setProfile(null);
       setDisplayName("");
+      setProfileLoading(false);
+
+      setActiveLeagueId("");
+      setLeagueName("");
+      setLeagueOwnerUid("");
+      setLeagueMemberUids([]);
       setLeagueReady(false);
+      setLeagueError("");
+
       setPlayers([]);
       setGames([]);
       setCfg(defaultCfg);
@@ -101,48 +116,53 @@ export default function App() {
   useEffect(() => {
     if (!user || !profile) return;
 
-    async function loadLeagueData() {
+    async function prepareLeague() {
       setLeagueReady(false);
+      setLeagueError("");
 
-      const ref = doc(db, "users", user.uid, "data", "league");
-      const snap = await getDoc(ref);
+      const params = new URLSearchParams(window.location.search);
+      const inviteLeagueId = params.get("league");
 
-      if (snap.exists()) {
-        const data = snap.data();
-        setPlayers(data.players || []);
-        setGames(data.games || []);
-        setCfg(data.cfg || defaultCfg);
-      } else {
-        setPlayers([]);
-        setGames([]);
-        setCfg(defaultCfg);
+      if (inviteLeagueId) {
+        await joinLeague(inviteLeagueId);
+        return;
+      }
+
+      if (profile.activeLeagueId) {
+        await loadLeagueById(profile.activeLeagueId);
+        return;
       }
 
       setLeagueReady(true);
     }
 
-    loadLeagueData();
+    prepareLeague();
   }, [user, profile]);
 
   useEffect(() => {
-    if (!user || !profile || !leagueReady) return;
+    if (!user || !profile || !leagueReady || !activeLeagueId) return;
 
     async function saveLeagueData() {
-      const ref = doc(db, "users", user.uid, "data", "league");
+      const ref = doc(db, "leagues", activeLeagueId);
 
-      await setDoc(ref, {
-        players,
-        games,
-        cfg,
-        updatedAt: Date.now(),
-      });
+      await setDoc(
+        ref,
+        {
+          players,
+          games,
+          cfg,
+          updatedAt: Date.now(),
+        },
+        { merge: true }
+      );
     }
 
     saveLeagueData();
-  }, [players, games, cfg, user, profile, leagueReady]);
+  }, [players, games, cfg, user, profile, leagueReady, activeLeagueId]);
 
   async function saveProfile() {
     if (!user) return;
+
     if (!displayName.trim()) {
       alert("ユーザー名を入力してください。");
       return;
@@ -152,12 +172,133 @@ export default function App() {
       displayName: displayName.trim(),
       email: user.email,
       uid: user.uid,
+      activeLeagueId: "",
       createdAt: Date.now(),
+      updatedAt: Date.now(),
     };
 
     await setDoc(doc(db, "users", user.uid), newProfile);
     setProfile(newProfile);
   }
+
+  async function loadLeagueById(leagueId) {
+    if (!user) return;
+
+    setLeagueReady(false);
+    setLeagueError("");
+
+    const ref = doc(db, "leagues", leagueId);
+    const snap = await getDoc(ref);
+
+    if (!snap.exists()) {
+      setLeagueError("リーグが見つかりません。");
+      setActiveLeagueId("");
+      setLeagueReady(true);
+      return;
+    }
+
+    const data = snap.data();
+
+    if (!data.memberUids?.includes(user.uid)) {
+      setLeagueError("このリーグに参加していません。招待URLから参加してください。");
+      setActiveLeagueId("");
+      setLeagueReady(true);
+      return;
+    }
+
+    setActiveLeagueId(leagueId);
+    setLeagueName(data.name || "名称未設定のリーグ");
+    setLeagueOwnerUid(data.ownerUid || "");
+    setLeagueMemberUids(data.memberUids || []);
+    setPlayers(data.players || []);
+    setGames(data.games || []);
+    setCfg(data.cfg || defaultCfg);
+    setLeagueReady(true);
+  }
+
+  async function createLeague(name) {
+    if (!user || !profile) return;
+
+    const cleanName = name.trim();
+    if (!cleanName) {
+      alert("リーグ名を入力してください。");
+      return;
+    }
+
+    const leagueId = uid();
+
+    const newLeague = {
+      name: cleanName,
+      ownerUid: user.uid,
+      memberUids: [user.uid],
+      inviteEnabled: true,
+      players: [],
+      games: [],
+      cfg: defaultCfg,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    await setDoc(doc(db, "leagues", leagueId), newLeague);
+
+    const updatedProfile = {
+      ...profile,
+      activeLeagueId: leagueId,
+      updatedAt: Date.now(),
+    };
+
+    await setDoc(doc(db, "users", user.uid), updatedProfile, { merge: true });
+
+    setProfile(updatedProfile);
+    setActiveLeagueId(leagueId);
+    setLeagueName(cleanName);
+    setLeagueOwnerUid(user.uid);
+    setLeagueMemberUids([user.uid]);
+    setPlayers([]);
+    setGames([]);
+    setCfg(defaultCfg);
+    setLeagueReady(true);
+  }
+
+  async function joinLeague(leagueId) {
+    if (!user || !profile) return;
+
+    setLeagueReady(false);
+    setLeagueError("");
+
+    const ref = doc(db, "leagues", leagueId);
+    const snap = await getDoc(ref);
+
+    if (!snap.exists()) {
+      setLeagueError("招待されたリーグが見つかりません。");
+      setLeagueReady(true);
+      return;
+    }
+
+    const data = snap.data();
+
+    if (!data.memberUids?.includes(user.uid)) {
+      await updateDoc(ref, {
+        memberUids: arrayUnion(user.uid),
+        updatedAt: Date.now(),
+      });
+    }
+
+    const updatedProfile = {
+      ...profile,
+      activeLeagueId: leagueId,
+      updatedAt: Date.now(),
+    };
+
+    await setDoc(doc(db, "users", user.uid), updatedProfile, { merge: true });
+    setProfile(updatedProfile);
+
+    await loadLeagueById(leagueId);
+  }
+
+  const inviteUrl = activeLeagueId
+    ? `${window.location.origin}${window.location.pathname}?league=${activeLeagueId}`
+    : "";
 
   if (!authReady) {
     return (
@@ -167,9 +308,7 @@ export default function App() {
           <div style={pageStyle}>
             <Header />
             <Card>
-              <p style={{ color: C.muted, textAlign: "center", padding: 20 }}>
-                読み込み中...
-              </p>
+              <p style={centerMutedStyle}>読み込み中...</p>
             </Card>
           </div>
         </div>
@@ -189,9 +328,7 @@ export default function App() {
             <LoginScreen />
           ) : profileLoading ? (
             <Card>
-              <p style={{ color: C.muted, textAlign: "center", padding: 20 }}>
-                プロフィール確認中...
-              </p>
+              <p style={centerMutedStyle}>プロフィール確認中...</p>
             </Card>
           ) : !profile ? (
             <ProfileSetup
@@ -202,35 +339,31 @@ export default function App() {
             />
           ) : !leagueReady ? (
             <Card>
-              <p style={{ color: C.muted, textAlign: "center", padding: 20 }}>
-                データ読み込み中...
-              </p>
+              <p style={centerMutedStyle}>リーグ情報を読み込み中...</p>
             </Card>
+          ) : !activeLeagueId ? (
+            <>
+              <UserCard profile={profile} user={user} />
+              {leagueError && (
+                <Card>
+                  <p style={{ color: C.red, textAlign: "center", padding: 12 }}>
+                    {leagueError}
+                  </p>
+                </Card>
+              )}
+              <LeagueSetup createLeague={createLeague} />
+              <LogoutCard />
+            </>
           ) : (
             <>
-              <Card>
-                <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>
-                    ログイン中
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 18,
-                      color: C.gold,
-                      fontWeight: 700,
-                      marginBottom: 4,
-                    }}
-                  >
-                    {profile.displayName}
-                  </div>
-                  <div style={{ fontSize: 12, color: C.green, marginBottom: 12 }}>
-                    {user.email}
-                  </div>
-                  <button onClick={() => signOut(auth)} style={loginBtnStyle}>
-                    ログアウト
-                  </button>
-                </div>
-              </Card>
+              <UserCard profile={profile} user={user} />
+
+              <LeagueInfo
+                leagueName={leagueName}
+                activeLeagueId={activeLeagueId}
+                memberCount={leagueMemberUids.length}
+                inviteUrl={inviteUrl}
+              />
 
               <div style={tabGridStyle}>
                 {[
@@ -282,6 +415,11 @@ export default function App() {
                   cfg={cfg}
                   setCfg={setCfg}
                   setGames={setGames}
+                  leagueName={leagueName}
+                  setLeagueName={setLeagueName}
+                  activeLeagueId={activeLeagueId}
+                  leagueOwnerUid={leagueOwnerUid}
+                  user={user}
                 />
               )}
             </>
@@ -329,24 +467,8 @@ function LoginScreen() {
   return (
     <Card>
       <div style={{ textAlign: "center", padding: "18px 0" }}>
-        <div
-          style={{
-            fontSize: 22,
-            fontWeight: 700,
-            color: C.gold,
-            marginBottom: 8,
-          }}
-        >
-          ログイン
-        </div>
-        <div
-          style={{
-            fontSize: 13,
-            color: C.muted,
-            marginBottom: 18,
-            lineHeight: 1.7,
-          }}
-        >
+        <div style={titleStyle}>ログイン</div>
+        <div style={descStyle}>
           麻雀リーグを利用するにはGoogleログインが必要です。
           <br />
           ログイン後に記録・履歴・成績・設定を利用できます。
@@ -363,19 +485,8 @@ function ProfileSetup({ user, displayName, setDisplayName, saveProfile }) {
   return (
     <Card>
       <div style={{ textAlign: "center", padding: "18px 0" }}>
-        <div
-          style={{
-            fontSize: 22,
-            fontWeight: 700,
-            color: C.gold,
-            marginBottom: 8,
-          }}
-        >
-          ユーザー名登録
-        </div>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>
-          表示用のユーザー名を決めてください。
-        </div>
+        <div style={titleStyle}>ユーザー名登録</div>
+        <div style={descStyle}>表示用のユーザー名を決めてください。</div>
         <div style={{ fontSize: 11, color: C.green, marginBottom: 12 }}>
           {user.email}
         </div>
@@ -383,12 +494,105 @@ function ProfileSetup({ user, displayName, setDisplayName, saveProfile }) {
         <input
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
-          placeholder="例：麻雀太郎"
+          placeholder="例：みやけ"
           style={{ ...inputStyle, marginBottom: 12 }}
         />
 
         <button onClick={saveProfile} style={googleBtnStyle}>
           登録して始める
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function UserCard({ profile, user }) {
+  return (
+    <Card>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>
+          ログイン中
+        </div>
+        <div
+          style={{
+            fontSize: 18,
+            color: C.gold,
+            fontWeight: 700,
+            marginBottom: 4,
+          }}
+        >
+          {profile.displayName}
+        </div>
+        <div style={{ fontSize: 12, color: C.green, marginBottom: 12 }}>
+          {user.email}
+        </div>
+        <button onClick={() => signOut(auth)} style={loginBtnStyle}>
+          ログアウト
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function LogoutCard() {
+  return (
+    <Card>
+      <button onClick={() => signOut(auth)} style={loginBtnStyle}>
+        ログアウト
+      </button>
+    </Card>
+  );
+}
+
+function LeagueSetup({ createLeague }) {
+  const [name, setName] = useState("");
+
+  return (
+    <Card>
+      <div style={{ textAlign: "center", padding: "12px 0" }}>
+        <div style={titleStyle}>リーグ作成</div>
+        <div style={descStyle}>
+          まずリーグを作成してください。
+          <br />
+          作成後、招待URLで友達を参加させられます。
+        </div>
+
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="例：みやけ麻雀会"
+          style={{ ...inputStyle, marginBottom: 12 }}
+        />
+
+        <button onClick={() => createLeague(name)} style={googleBtnStyle}>
+          リーグを作成
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function LeagueInfo({ leagueName, activeLeagueId, memberCount, inviteUrl }) {
+  async function copyInviteUrl() {
+    await navigator.clipboard.writeText(inviteUrl);
+    alert("招待URLをコピーしました。");
+  }
+
+  return (
+    <Card>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>
+          現在のリーグ
+        </div>
+        <div style={{ fontSize: 18, color: C.gold, fontWeight: 700 }}>
+          {leagueName}
+        </div>
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+          ID: {activeLeagueId} / メンバー {memberCount}人
+        </div>
+
+        <button onClick={copyInviteUrl} style={{ ...loginBtnStyle, marginTop: 12 }}>
+          招待URLをコピー
         </button>
       </div>
     </Card>
@@ -403,7 +607,7 @@ function RecordTab({ players, games, setGames, cfg }) {
   if (players.length < 4) {
     return (
       <Card>
-        <p style={{ color: C.muted, textAlign: "center", padding: 20 }}>
+        <p style={centerMutedStyle}>
           設定タブでプレイヤーを4人以上追加してください。
         </p>
       </Card>
@@ -549,9 +753,7 @@ function HistoryTab({ players, games, setGames }) {
   if (games.length === 0) {
     return (
       <Card>
-        <p style={{ color: C.muted, textAlign: "center", padding: 20 }}>
-          まだ履歴がありません。
-        </p>
+        <p style={centerMutedStyle}>まだ履歴がありません。</p>
       </Card>
     );
   }
@@ -640,9 +842,7 @@ function StatsTab({ players, games }) {
     <Card>
       <Label>総合ランキング</Label>
       {stats.length === 0 ? (
-        <p style={{ color: C.muted, textAlign: "center", padding: 20 }}>
-          プレイヤーがいません。
-        </p>
+        <p style={centerMutedStyle}>プレイヤーがいません。</p>
       ) : (
         stats.map((s, i) => (
           <div
@@ -680,8 +880,20 @@ function StatsTab({ players, games }) {
   );
 }
 
-function SettingsTab({ players, setPlayers, cfg, setCfg, setGames }) {
+function SettingsTab({
+  players,
+  setPlayers,
+  cfg,
+  setCfg,
+  setGames,
+  leagueName,
+  setLeagueName,
+  activeLeagueId,
+  leagueOwnerUid,
+  user,
+}) {
   const [name, setName] = useState("");
+  const [editingLeagueName, setEditingLeagueName] = useState(leagueName);
 
   function addPlayer() {
     if (!name.trim()) return;
@@ -689,8 +901,56 @@ function SettingsTab({ players, setPlayers, cfg, setCfg, setGames }) {
     setName("");
   }
 
+  async function saveLeagueName() {
+    if (!editingLeagueName.trim()) {
+      alert("リーグ名を入力してください。");
+      return;
+    }
+
+    await setDoc(
+      doc(db, "leagues", activeLeagueId),
+      {
+        name: editingLeagueName.trim(),
+        updatedAt: Date.now(),
+      },
+      { merge: true }
+    );
+
+    setLeagueName(editingLeagueName.trim());
+  }
+
   return (
     <>
+      <Card>
+        <Label>リーグ設定</Label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            value={editingLeagueName}
+            onChange={(e) => setEditingLeagueName(e.target.value)}
+            placeholder="リーグ名"
+            style={inputStyle}
+          />
+          <button
+            onClick={saveLeagueName}
+            style={{
+              padding: "0 14px",
+              borderRadius: 8,
+              border: `1px solid ${C.gold}`,
+              background: C.surface,
+              color: C.gold,
+              cursor: "pointer",
+            }}
+          >
+            保存
+          </button>
+        </div>
+        {user.uid === leagueOwnerUid && (
+          <div style={{ color: C.muted, fontSize: 11, marginTop: 8 }}>
+            あなたはこのリーグの管理者です。
+          </div>
+        )}
+      </Card>
+
       <Card>
         <Label>プレイヤー管理</Label>
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -786,7 +1046,7 @@ function SettingsTab({ players, setPlayers, cfg, setCfg, setGames }) {
         <Label>データ初期化</Label>
         <button
           onClick={() => {
-            if (confirm("全データを削除しますか？")) {
+            if (confirm("このリーグの全データを削除しますか？")) {
               setPlayers([]);
               setGames([]);
               setCfg(defaultCfg);
@@ -802,7 +1062,7 @@ function SettingsTab({ players, setPlayers, cfg, setCfg, setGames }) {
             cursor: "pointer",
           }}
         >
-          全データ削除
+          このリーグの全データ削除
         </button>
       </Card>
     </>
@@ -911,6 +1171,27 @@ const tabGridStyle = {
   gridTemplateColumns: "repeat(4, 1fr)",
   gap: 6,
   marginBottom: 16,
+};
+
+const centerMutedStyle = {
+  color: C.muted,
+  textAlign: "center",
+  padding: 20,
+  lineHeight: 1.7,
+};
+
+const titleStyle = {
+  fontSize: 22,
+  fontWeight: 700,
+  color: C.gold,
+  marginBottom: 8,
+};
+
+const descStyle = {
+  fontSize: 13,
+  color: C.muted,
+  marginBottom: 18,
+  lineHeight: 1.7,
 };
 
 const inputStyle = {
