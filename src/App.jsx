@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { auth, provider, db } from "./firebase";
-import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
+import {
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged,
+  signInAnonymously,
+  linkWithPopup,
+} from "firebase/auth";
 import {
   arrayUnion,
   doc,
@@ -324,9 +330,11 @@ export default function App() {
 
     const newProfile = {
       displayName: displayName.trim(),
-      email: user.email,
+      email: user.email || "",
       uid: user.uid,
       activeLeagueId: "",
+      authProvider: user.isAnonymous ? "anonymous" : "google",
+      linkedToGoogle: !user.isAnonymous,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -384,6 +392,68 @@ export default function App() {
     } catch (e) {
       console.error(e);
       alert("ユーザー名の変更に失敗しました。");
+    }
+  }
+
+
+  async function signInAsGuest() {
+    try {
+      await signInAnonymously(auth);
+    } catch (e) {
+      console.error(e);
+      alert("ゲストログインに失敗しました。Firebase Authenticationで匿名ログインが有効か確認してください。");
+    }
+  }
+
+  async function linkGuestWithGoogle() {
+    if (!user || !user.isAnonymous) return;
+
+    try {
+      provider.setCustomParameters({
+        prompt: "select_account",
+      });
+
+      const result = await linkWithPopup(user, provider);
+      const linkedUser = result.user;
+      const now = Date.now();
+
+      const updatedProfile = {
+        ...profile,
+        email: linkedUser.email || "",
+        authProvider: "google",
+        linkedToGoogle: true,
+        updatedAt: now,
+      };
+
+      await setDoc(
+        doc(db, "users", linkedUser.uid),
+        {
+          email: linkedUser.email || "",
+          authProvider: "google",
+          linkedToGoogle: true,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+
+      setUser(linkedUser);
+      setProfile(updatedProfile);
+
+      alert("Google連携が完了しました。今後はGoogleログインで同じデータを使えます。");
+    } catch (e) {
+      console.error(e);
+
+      if (
+        e.code === "auth/credential-already-in-use" ||
+        e.code === "auth/email-already-in-use"
+      ) {
+        alert(
+          "このGoogleアカウントは既に別のユーザーで使われています。別のGoogleアカウントで連携してください。"
+        );
+        return;
+      }
+
+      alert("Google連携に失敗しました。もう一度お試しください。");
     }
   }
 
@@ -775,6 +845,50 @@ export default function App() {
     }
   }
 
+  async function removeMemberFromLeague(targetUid) {
+    if (!canAdmin || !activeLeagueId) return;
+
+    if (targetUid === leagueOwnerUid) {
+      alert("リーグ作成者は削除できません。");
+      return;
+    }
+
+    if (targetUid === user.uid) {
+      alert("自分自身は削除できません。");
+      return;
+    }
+
+    const currentAdminUids = leagueAdminUids.length
+      ? leagueAdminUids
+      : leagueOwnerUid
+      ? [leagueOwnerUid]
+      : [];
+
+    const nextMemberUids = leagueMemberUids.filter((uid) => uid !== targetUid);
+    let nextAdminUids = currentAdminUids.filter((uid) => uid !== targetUid);
+
+    if (leagueOwnerUid && !nextAdminUids.includes(leagueOwnerUid)) {
+      nextAdminUids = [leagueOwnerUid, ...nextAdminUids];
+    }
+
+    const nextMemberProfiles = memberProfiles.filter((m) => m.uid !== targetUid);
+
+    try {
+      setLeagueMemberUids(nextMemberUids);
+      setLeagueAdminUids(nextAdminUids);
+      setMemberProfiles(nextMemberProfiles);
+
+      await updateDoc(doc(db, "leagues", activeLeagueId), {
+        memberUids: nextMemberUids,
+        adminUids: nextAdminUids,
+        updatedAt: Date.now(),
+      });
+    } catch (e) {
+      console.error(e);
+      alert("ユーザー削除に失敗しました。");
+    }
+  }
+
   const inviteUrl = activeLeagueId
     ? `${window.location.origin}${window.location.pathname}?league=${activeLeagueId}`
     : "";
@@ -809,7 +923,7 @@ export default function App() {
           <Header />
 
           {!user ? (
-            <LoginScreen />
+            <LoginScreen signInAsGuest={signInAsGuest} />
           ) : profileLoading ? (
             <Card>
               <p style={centerMutedStyle}>プロフィール確認中...</p>
@@ -832,6 +946,7 @@ export default function App() {
                   user={user}
                   canAdmin={canAdmin}
                   updateDisplayName={updateOwnDisplayName}
+                  linkGuestWithGoogle={linkGuestWithGoogle}
                 />
 
               {leagueError && (
@@ -850,6 +965,7 @@ export default function App() {
                   user={user}
                   canAdmin={canAdmin}
                   updateDisplayName={updateOwnDisplayName}
+                  linkGuestWithGoogle={linkGuestWithGoogle}
                 />
 
                 {leagueError && (
@@ -930,6 +1046,7 @@ export default function App() {
                     leagueAdminUids={leagueAdminUids}
                     memberProfiles={memberProfiles}
                     setAdminStatus={setAdminStatus}
+                    removeMemberFromLeague={removeMemberFromLeague}
                     resetLeagueData={resetLeagueData}
                     user={user}
                   />
@@ -1085,19 +1202,52 @@ function Header() {
   );
 }
 
-function LoginScreen() {
+function LoginScreen({ signInAsGuest }) {
+  async function signInWithGoogle() {
+    try {
+      provider.setCustomParameters({
+        prompt: "select_account",
+      });
+      await signInWithPopup(auth, provider);
+    } catch (e) {
+      console.error(e);
+      alert("Googleログインに失敗しました。");
+    }
+  }
+
   return (
     <Card>
       <div style={{ textAlign: "center", padding: "18px 0" }}>
         <div style={titleStyle}>ログイン</div>
         <div style={descStyle}>
-          麻雀リーグを利用するにはGoogleログインが必要です。
+          Googleログイン、またはゲストとしてすぐに始められます。
           <br />
-          ログイン後に記録・履歴・成績・設定を利用できます。
+          ゲスト利用後にGoogleへ連携すると、同じデータを引き継げます。
         </div>
-        <button onClick={() => signInWithPopup(auth, provider)} style={googleBtnStyle}>
+
+        <button onClick={signInWithGoogle} style={googleBtnStyle}>
           Googleでログイン
         </button>
+
+        <button
+          onClick={signInAsGuest}
+          style={{ ...loginBtnStyle, marginTop: 10 }}
+        >
+          ゲストではじめる
+        </button>
+
+        <div
+          style={{
+            marginTop: 12,
+            fontSize: 11,
+            color: C.muted,
+            lineHeight: 1.7,
+          }}
+        >
+          ゲスト利用は同じ端末・同じブラウザでは継続できます。
+          <br />
+          ブラウザデータ削除や端末変更をすると、引き継げない場合があります。
+        </div>
       </div>
     </Card>
   );
@@ -1109,8 +1259,21 @@ function ProfileSetup({ user, displayName, setDisplayName, saveProfile }) {
       <div style={{ textAlign: "center", padding: "18px 0" }}>
         <div style={titleStyle}>ユーザー名登録</div>
         <div style={descStyle}>表示用のユーザー名を決めてください。</div>
-        <div style={{ fontSize: 11, color: C.green, marginBottom: 12 }}>
-          {user.email}
+        <div
+          style={{
+            fontSize: 11,
+            color: user.isAnonymous ? C.gold : C.green,
+            marginBottom: 12,
+            lineHeight: 1.6,
+          }}
+        >
+          {user.isAnonymous ? "ゲスト利用中" : user.email}
+          {user.isAnonymous && (
+            <>
+              <br />
+              Google連携すると、このデータを引き継げます。
+            </>
+          )}
         </div>
 
         <input
@@ -1128,10 +1291,19 @@ function ProfileSetup({ user, displayName, setDisplayName, saveProfile }) {
   );
 }
 
-function UserCard({ profile, user, canAdmin, updateDisplayName }) {
+function UserCard({
+  profile,
+  user,
+  canAdmin,
+  updateDisplayName,
+  linkGuestWithGoogle,
+}) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(profile.displayName || "");
   const [saving, setSaving] = useState(false);
+  const [linking, setLinking] = useState(false);
+
+  const isGuest = !!user?.isAnonymous;
 
   useEffect(() => {
     setName(profile.displayName || "");
@@ -1152,6 +1324,27 @@ function UserCard({ profile, user, canAdmin, updateDisplayName }) {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleLinkGoogle() {
+    try {
+      setLinking(true);
+      await linkGuestWithGoogle();
+    } finally {
+      setLinking(false);
+    }
+  }
+
+  async function handleSignOut() {
+    if (isGuest) {
+      const ok = confirm(
+        "ゲストユーザーでログアウトすると、このブラウザで同じデータに戻れない場合があります。ログアウトしますか？"
+      );
+
+      if (!ok) return;
+    }
+
+    await signOut(auth);
   }
 
   return (
@@ -1223,16 +1416,43 @@ function UserCard({ profile, user, canAdmin, updateDisplayName }) {
           style={{
             display: "inline-block",
             fontSize: 11,
-            color: canAdmin ? C.gold : C.muted,
-            border: `1px solid ${canAdmin ? C.gold : C.border}`,
+            color: isGuest ? C.gold : canAdmin ? C.gold : C.muted,
+            border: `1px solid ${isGuest || canAdmin ? C.gold : C.border}`,
             borderRadius: 999,
             padding: "3px 10px",
-            marginBottom: 12,
+            marginBottom: 8,
           }}
         >
-          {canAdmin ? "管理者" : "一般ユーザー"}
+          {isGuest ? "ゲストユーザー" : canAdmin ? "管理者" : "一般ユーザー"}
         </div>
-        <button onClick={() => signOut(auth)} style={loginBtnStyle}>
+
+        {isGuest && (
+          <div
+            style={{
+              background: "#20180a",
+              border: `1px solid ${C.gold}`,
+              color: C.gold,
+              borderRadius: 10,
+              padding: 10,
+              fontSize: 11,
+              lineHeight: 1.7,
+              marginBottom: 12,
+              textAlign: "left",
+            }}
+          >
+            ゲスト利用中です。ブラウザデータ削除・端末変更・ログアウトをすると、
+            同じデータに戻れない場合があります。
+            <button
+              onClick={handleLinkGoogle}
+              disabled={linking}
+              style={{ ...googleBtnStyle, marginTop: 10, padding: 10 }}
+            >
+              {linking ? "連携中..." : "Googleに連携してデータを保存"}
+            </button>
+          </div>
+        )}
+
+        <button onClick={handleSignOut} style={loginBtnStyle}>
           ログアウト
         </button>
       </div>
@@ -1972,6 +2192,7 @@ function SettingsTab({
   leagueAdminUids,
   memberProfiles,
   setAdminStatus,
+  removeMemberFromLeague,
   resetLeagueData,
   user,
 }) {
@@ -2045,10 +2266,13 @@ function SettingsTab({
         <div style={{ color: C.muted, fontSize: 11, marginTop: 8 }}>
           あなたはこのリーグの管理者です。
         </div>
+        <div style={{ color: C.muted, fontSize: 11, marginTop: 6, lineHeight: 1.6 }}>
+          ログインユーザー削除は、このリーグの参加メンバーから外す操作です。
+        </div>
       </Card>
 
       <Card>
-        <Label>権限管理</Label>
+        <Label>ログインユーザー管理</Label>
 
         {memberProfiles.length === 0 ? (
           <p style={centerSmallMutedStyle}>メンバー情報を読み込み中...</p>
@@ -2086,25 +2310,52 @@ function SettingsTab({
                   </div>
                 </div>
 
-                {isOwner ? (
-                  <div style={{ fontSize: 11, color: C.muted }}>
-                    解除不可
-                  </div>
-                ) : isAdmin ? (
-                  <button
-                    onClick={() => setAdminStatus(m.uid, false)}
-                    style={smallDangerButtonStyle}
-                  >
-                    一般に戻す
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => setAdminStatus(m.uid, true)}
-                    style={smallGoldButtonStyle}
-                  >
-                    管理者にする
-                  </button>
-                )}
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "center",
+                    justifyContent: "flex-end",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  {isOwner ? (
+                    <div style={{ fontSize: 11, color: C.muted }}>
+                      変更不可
+                    </div>
+                  ) : isAdmin ? (
+                    <button
+                      onClick={() => setAdminStatus(m.uid, false)}
+                      style={smallDangerButtonStyle}
+                    >
+                      一般に戻す
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setAdminStatus(m.uid, true)}
+                      style={smallGoldButtonStyle}
+                    >
+                      管理者にする
+                    </button>
+                  )}
+
+                  {!isOwner && !isMe && (
+                    <button
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `${m.displayName}をこのリーグから削除しますか？\n削除後、このユーザーはリーグを見られなくなります。`
+                          )
+                        ) {
+                          removeMemberFromLeague(m.uid);
+                        }
+                      }}
+                      style={smallDangerButtonStyle}
+                    >
+                      ユーザー削除
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })
