@@ -340,6 +340,53 @@ export default function App() {
     }
   }
 
+
+  async function updateOwnDisplayName(nextName) {
+    if (!user || !profile) return;
+
+    const cleanName = nextName.trim();
+
+    if (!cleanName) {
+      alert("ユーザー名を入力してください。");
+      return;
+    }
+
+    const now = Date.now();
+
+    const updatedProfile = {
+      ...profile,
+      displayName: cleanName,
+      updatedAt: now,
+    };
+
+    try {
+      await setDoc(
+        doc(db, "users", user.uid),
+        {
+          displayName: cleanName,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+
+      setProfile(updatedProfile);
+
+      setMemberProfiles((prev) =>
+        prev.map((m) =>
+          m.uid === user.uid
+            ? {
+                ...m,
+                displayName: cleanName,
+              }
+            : m
+        )
+      );
+    } catch (e) {
+      console.error(e);
+      alert("ユーザー名の変更に失敗しました。");
+    }
+  }
+
   async function clearActiveLeague() {
     if (!user || !profile) return;
 
@@ -780,7 +827,12 @@ export default function App() {
             </Card>
           ) : !activeLeagueId ? (
             <>
-              <UserCard profile={profile} user={user} canAdmin={canAdmin} />
+              <UserCard
+                  profile={profile}
+                  user={user}
+                  canAdmin={canAdmin}
+                  updateDisplayName={updateOwnDisplayName}
+                />
 
               {leagueError && (
                 <Card>
@@ -793,7 +845,12 @@ export default function App() {
           ) : (
             <div className="desktop-shell">
               <aside className="desktop-sidebar">
-                <UserCard profile={profile} user={user} canAdmin={canAdmin} />
+                <UserCard
+                  profile={profile}
+                  user={user}
+                  canAdmin={canAdmin}
+                  updateDisplayName={updateOwnDisplayName}
+                />
 
                 {leagueError && (
                   <Card>
@@ -1071,23 +1128,97 @@ function ProfileSetup({ user, displayName, setDisplayName, saveProfile }) {
   );
 }
 
-function UserCard({ profile, user, canAdmin }) {
+function UserCard({ profile, user, canAdmin, updateDisplayName }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(profile.displayName || "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setName(profile.displayName || "");
+  }, [profile.displayName]);
+
+  async function saveName() {
+    const cleanName = name.trim();
+
+    if (!cleanName) {
+      alert("ユーザー名を入力してください。");
+      return;
+    }
+
+    try {
+      setSaving(true);
+      await updateDisplayName(cleanName);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <Card>
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>
           ログイン中
         </div>
-        <div
-          style={{
-            fontSize: 18,
-            color: C.gold,
-            fontWeight: 700,
-            marginBottom: 6,
-          }}
-        >
-          {profile.displayName}
-        </div>
+
+        {!editing ? (
+          <>
+            <div
+              style={{
+                fontSize: 18,
+                color: C.gold,
+                fontWeight: 700,
+                marginBottom: 6,
+              }}
+            >
+              {profile.displayName}
+            </div>
+
+            <button
+              onClick={() => setEditing(true)}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: C.muted,
+                cursor: "pointer",
+                fontSize: 11,
+                marginBottom: 8,
+              }}
+            >
+              ユーザー名を変更
+            </button>
+          </>
+        ) : (
+          <div style={{ marginBottom: 10 }}>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="ユーザー名"
+              style={{ ...inputStyle, marginBottom: 8, textAlign: "center" }}
+            />
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <button
+                onClick={() => {
+                  setName(profile.displayName || "");
+                  setEditing(false);
+                }}
+                disabled={saving}
+                style={smallMutedFullButtonStyle}
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={saveName}
+                disabled={saving}
+                style={smallGoldFullButtonStyle}
+              >
+                {saving ? "保存中..." : "保存"}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div
           style={{
             display: "inline-block",
