@@ -1279,7 +1279,7 @@ function ProfileSetup({ user, displayName, setDisplayName, saveProfile }) {
         <input
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
-          placeholder="例：みやけ"
+          placeholder="例：麻雀太郎"
           style={{ ...inputStyle, marginBottom: 12 }}
         />
 
@@ -1476,7 +1476,7 @@ function LeagueSetup({ createLeague }) {
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="例：みやけ麻雀会"
+          placeholder="例：麻雀会"
           style={{ ...inputStyle, marginBottom: 12 }}
         />
 
