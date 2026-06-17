@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { auth, provider, db } from "./firebase";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
-import { arrayUnion, doc, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import {
+  arrayUnion,
+  doc,
+  getDoc,
+  onSnapshot,
+  setDoc,
+  updateDoc,
+} from "firebase/firestore";
 
 const C = {
   bg: "#0e0e1a",
@@ -28,6 +35,14 @@ function uid() {
 
 function fmtPt(n) {
   return (n > 0 ? "+" : "") + Number(n).toFixed(1);
+}
+
+function sortGames(list) {
+  return [...list].sort((a, b) => {
+    const at = a.createdAt || 0;
+    const bt = b.createdAt || 0;
+    return bt - at;
+  });
 }
 
 function calcPoints(entries, cfg) {
@@ -183,53 +198,70 @@ export default function App() {
   }, [user, profile]);
 
   useEffect(() => {
-    if (!user || !profile || !leagueReady || !activeLeagueId || !canMember) {
-      return;
-    }
+    if (!user || !activeLeagueId) return;
 
-    async function saveLeagueData() {
-      try {
-        const ref = doc(db, "leagues", activeLeagueId);
+    const ref = doc(db, "leagues", activeLeagueId);
 
-        if (canAdmin) {
-          await setDoc(
-            ref,
-            {
-              players,
-              games,
-              cfg,
-              updatedAt: Date.now(),
-            },
-            { merge: true }
-          );
-        } else {
-          await setDoc(
-            ref,
-            {
-              games,
-              updatedAt: Date.now(),
-            },
-            { merge: true }
-          );
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (!snap.exists()) {
+          setLeagueError("リーグが削除されたか、見つかりません。");
+          setActiveLeagueId("");
+          setLeagueName("");
+          setLeagueOwnerUid("");
+          setLeagueMemberUids([]);
+          setLeagueAdminUids([]);
+          setPlayers([]);
+          setGames([]);
+          setCfg(defaultCfg);
+          setLeagueReady(true);
+          return;
         }
-      } catch (e) {
-        console.error(e);
-        setLeagueError("リーグデータの保存に失敗しました。");
-      }
-    }
 
-    saveLeagueData();
-  }, [
-    players,
-    games,
-    cfg,
-    user,
-    profile,
-    leagueReady,
-    activeLeagueId,
-    canMember,
-    canAdmin,
-  ]);
+        const data = snap.data();
+
+        if (!data.memberUids?.includes(user.uid)) {
+          setLeagueError("このリーグのメンバーではありません。");
+          setActiveLeagueId("");
+          setLeagueName("");
+          setLeagueOwnerUid("");
+          setLeagueMemberUids([]);
+          setLeagueAdminUids([]);
+          setPlayers([]);
+          setGames([]);
+          setCfg(defaultCfg);
+          setLeagueReady(true);
+          return;
+        }
+
+        const ownerUid = data.ownerUid || "";
+        const adminUids =
+          data.adminUids && data.adminUids.length > 0
+            ? data.adminUids
+            : ownerUid
+            ? [ownerUid]
+            : [];
+
+        setLeagueName(data.name || "名称未設定のリーグ");
+        setLeagueOwnerUid(ownerUid);
+        setLeagueMemberUids(data.memberUids || []);
+        setLeagueAdminUids(adminUids);
+        setPlayers(data.players || []);
+        setGames(sortGames(data.games || []));
+        setCfg(data.cfg || defaultCfg);
+        setLeagueReady(true);
+        setLeagueError("");
+      },
+      (e) => {
+        console.error(e);
+        setLeagueError("リアルタイム同期に失敗しました。Firestoreルールを確認してください。");
+        setLeagueReady(true);
+      }
+    );
+
+    return () => unsub();
+  }, [user, activeLeagueId]);
 
   useEffect(() => {
     if (!leagueMemberUids.length) {
@@ -383,7 +415,7 @@ export default function App() {
       setLeagueMemberUids(data.memberUids || []);
       setLeagueAdminUids(adminUids);
       setPlayers(data.players || []);
-      setGames(data.games || []);
+      setGames(sortGames(data.games || []));
       setCfg(data.cfg || defaultCfg);
       setLeagueReady(true);
     } catch (e) {
@@ -505,6 +537,117 @@ export default function App() {
     }
   }
 
+  async function saveGameToLeague(game) {
+    if (!canMember || !activeLeagueId) {
+      alert("保存するにはリーグ参加が必要です。");
+      return;
+    }
+
+    try {
+      setGames(sortGames([game, ...games]));
+
+      await updateDoc(doc(db, "leagues", activeLeagueId), {
+        games: arrayUnion(game),
+        updatedAt: Date.now(),
+      });
+    } catch (e) {
+      console.error(e);
+      alert("対局結果の保存に失敗しました。");
+    }
+  }
+
+  async function deleteGame(gameId) {
+    if (!canAdmin || !activeLeagueId) return;
+
+    const nextGames = games.filter((g) => g.id !== gameId);
+
+    try {
+      setGames(nextGames);
+
+      await updateDoc(doc(db, "leagues", activeLeagueId), {
+        games: nextGames,
+        updatedAt: Date.now(),
+      });
+    } catch (e) {
+      console.error(e);
+      alert("履歴削除に失敗しました。");
+    }
+  }
+
+  async function saveLeagueNameToDb(nextName) {
+    if (!canAdmin || !activeLeagueId) return;
+
+    const cleanName = nextName.trim();
+    if (!cleanName) {
+      alert("リーグ名を入力してください。");
+      return;
+    }
+
+    try {
+      setLeagueName(cleanName);
+
+      await updateDoc(doc(db, "leagues", activeLeagueId), {
+        name: cleanName,
+        updatedAt: Date.now(),
+      });
+    } catch (e) {
+      console.error(e);
+      alert("リーグ名の保存に失敗しました。");
+    }
+  }
+
+  async function savePlayersToDb(nextPlayers) {
+    if (!canAdmin || !activeLeagueId) return;
+
+    try {
+      setPlayers(nextPlayers);
+
+      await updateDoc(doc(db, "leagues", activeLeagueId), {
+        players: nextPlayers,
+        updatedAt: Date.now(),
+      });
+    } catch (e) {
+      console.error(e);
+      alert("プレイヤー情報の保存に失敗しました。");
+    }
+  }
+
+  async function saveCfgToDb(nextCfg) {
+    if (!canAdmin || !activeLeagueId) return;
+
+    try {
+      setCfg(nextCfg);
+
+      await updateDoc(doc(db, "leagues", activeLeagueId), {
+        cfg: nextCfg,
+        updatedAt: Date.now(),
+      });
+    } catch (e) {
+      console.error(e);
+      alert("ルール設定の保存に失敗しました。");
+    }
+  }
+
+  async function resetLeagueData() {
+    if (!canAdmin || !activeLeagueId) return;
+
+    try {
+      setPlayers([]);
+      setGames([]);
+      setCfg(defaultCfg);
+
+      await updateDoc(doc(db, "leagues", activeLeagueId), {
+        players: [],
+        games: [],
+        cfg: defaultCfg,
+        updatedAt: Date.now(),
+      });
+    } catch (e) {
+      console.error(e);
+      alert("データ初期化に失敗しました。");
+    }
+  }
+
   async function setAdminStatus(targetUid, shouldBeAdmin) {
     if (!canAdmin || !activeLeagueId) return;
 
@@ -528,12 +671,12 @@ export default function App() {
     }
 
     try {
+      setLeagueAdminUids(nextAdminUids);
+
       await updateDoc(doc(db, "leagues", activeLeagueId), {
         adminUids: nextAdminUids,
         updatedAt: Date.now(),
       });
-
-      setLeagueAdminUids(nextAdminUids);
     } catch (e) {
       console.error(e);
       alert("権限変更に失敗しました。");
@@ -637,8 +780,7 @@ export default function App() {
               {tab === "record" && (
                 <RecordTab
                   players={players}
-                  games={games}
-                  setGames={setGames}
+                  saveGameToLeague={saveGameToLeague}
                   cfg={cfg}
                   canSaveGame={canMember}
                 />
@@ -648,7 +790,7 @@ export default function App() {
                 <HistoryTab
                   players={players}
                   games={games}
-                  setGames={setGames}
+                  deleteGame={deleteGame}
                   canAdmin={canAdmin}
                 />
               )}
@@ -658,17 +800,16 @@ export default function App() {
               {tab === "settings" && canAdmin && (
                 <SettingsTab
                   players={players}
-                  setPlayers={setPlayers}
+                  savePlayersToDb={savePlayersToDb}
                   cfg={cfg}
-                  setCfg={setCfg}
-                  setGames={setGames}
+                  saveCfgToDb={saveCfgToDb}
                   leagueName={leagueName}
-                  setLeagueName={setLeagueName}
-                  activeLeagueId={activeLeagueId}
+                  saveLeagueNameToDb={saveLeagueNameToDb}
                   leagueOwnerUid={leagueOwnerUid}
                   leagueAdminUids={leagueAdminUids}
                   memberProfiles={memberProfiles}
                   setAdminStatus={setAdminStatus}
+                  resetLeagueData={resetLeagueData}
                   user={user}
                 />
               )}
@@ -859,7 +1000,7 @@ function LeagueInfo({ leagueName, activeLeagueId, memberCount, inviteUrl, canAdm
   );
 }
 
-function RecordTab({ players, games, setGames, cfg, canSaveGame }) {
+function RecordTab({ players, saveGameToLeague, cfg, canSaveGame }) {
   const [selected, setSelected] = useState([]);
   const [scores, setScores] = useState({});
   const [preview, setPreview] = useState(null);
@@ -899,19 +1040,23 @@ function RecordTab({ players, games, setGames, cfg, canSaveGame }) {
     setPreview(calcPoints(entries, cfg));
   }
 
-  function saveGame() {
+  async function saveGame() {
     if (!canSaveGame) {
       alert("保存するにはリーグ参加が必要です。");
       return;
     }
 
+    const now = Date.now();
+
     const game = {
       id: uid(),
-      date: new Date().toLocaleString("ja-JP"),
+      date: new Date(now).toLocaleString("ja-JP"),
+      createdAt: now,
       entries: preview,
     };
 
-    setGames([game, ...games]);
+    await saveGameToLeague(game);
+
     setSelected([]);
     setScores({});
     setPreview(null);
@@ -1020,7 +1165,7 @@ function RecordTab({ players, games, setGames, cfg, canSaveGame }) {
   );
 }
 
-function HistoryTab({ players, games, setGames, canAdmin }) {
+function HistoryTab({ players, games, deleteGame, canAdmin }) {
   if (games.length === 0) {
     return (
       <Card>
@@ -1061,7 +1206,7 @@ function HistoryTab({ players, games, setGames, canAdmin }) {
 
           {canAdmin && (
             <button
-              onClick={() => setGames(games.filter((x) => x.id !== g.id))}
+              onClick={() => deleteGame(g.id)}
               style={{
                 marginTop: 8,
                 width: "100%",
@@ -1155,17 +1300,16 @@ function StatsTab({ players, games }) {
 
 function SettingsTab({
   players,
-  setPlayers,
+  savePlayersToDb,
   cfg,
-  setCfg,
-  setGames,
+  saveCfgToDb,
   leagueName,
-  setLeagueName,
-  activeLeagueId,
+  saveLeagueNameToDb,
   leagueOwnerUid,
   leagueAdminUids,
   memberProfiles,
   setAdminStatus,
+  resetLeagueData,
   user,
 }) {
   const [name, setName] = useState("");
@@ -1177,31 +1321,26 @@ function SettingsTab({
 
   function addPlayer() {
     if (!name.trim()) return;
-    setPlayers([...players, { id: uid(), name: name.trim() }]);
+    savePlayersToDb([...players, { id: uid(), name: name.trim() }]);
     setName("");
   }
 
-  async function saveLeagueName() {
-    if (!editingLeagueName.trim()) {
-      alert("リーグ名を入力してください。");
-      return;
-    }
+  function removePlayer(playerId) {
+    savePlayersToDb(players.filter((x) => x.id !== playerId));
+  }
 
-    try {
-      await setDoc(
-        doc(db, "leagues", activeLeagueId),
-        {
-          name: editingLeagueName.trim(),
-          updatedAt: Date.now(),
-        },
-        { merge: true }
-      );
+  function updateUma(index, value) {
+    const uma = [...cfg.uma];
+    uma[index] = Number(value);
+    saveCfgToDb({ ...cfg, uma });
+  }
 
-      setLeagueName(editingLeagueName.trim());
-    } catch (e) {
-      console.error(e);
-      alert("リーグ名の保存に失敗しました。");
-    }
+  function updateOka(value) {
+    saveCfgToDb({ ...cfg, oka: Number(value) });
+  }
+
+  function updateReturnPt(value) {
+    saveCfgToDb({ ...cfg, returnPt: Number(value) });
   }
 
   return (
@@ -1216,7 +1355,7 @@ function SettingsTab({
             style={inputStyle}
           />
           <button
-            onClick={saveLeagueName}
+            onClick={() => saveLeagueNameToDb(editingLeagueName)}
             style={smallGoldButtonStyle}
           >
             保存
@@ -1300,10 +1439,7 @@ function SettingsTab({
             placeholder="プレイヤー名"
             style={inputStyle}
           />
-          <button
-            onClick={addPlayer}
-            style={smallGoldButtonStyle}
-          >
+          <button onClick={addPlayer} style={smallGoldButtonStyle}>
             追加
           </button>
         </div>
@@ -1320,7 +1456,7 @@ function SettingsTab({
           >
             <span>{p.name}</span>
             <button
-              onClick={() => setPlayers(players.filter((x) => x.id !== p.id))}
+              onClick={() => removePlayer(p.id)}
               style={{
                 border: "none",
                 background: "transparent",
@@ -1344,11 +1480,7 @@ function SettingsTab({
             <input
               type="number"
               value={cfg.uma[i]}
-              onChange={(e) => {
-                const uma = [...cfg.uma];
-                uma[i] = Number(e.target.value);
-                setCfg({ ...cfg, uma });
-              }}
+              onChange={(e) => updateUma(i, e.target.value)}
               style={inputStyle}
             />
           </div>
@@ -1359,7 +1491,7 @@ function SettingsTab({
           <input
             type="number"
             value={cfg.oka}
-            onChange={(e) => setCfg({ ...cfg, oka: Number(e.target.value) })}
+            onChange={(e) => updateOka(e.target.value)}
             style={inputStyle}
           />
         </div>
@@ -1369,7 +1501,7 @@ function SettingsTab({
           <input
             type="number"
             value={cfg.returnPt}
-            onChange={(e) => setCfg({ ...cfg, returnPt: Number(e.target.value) })}
+            onChange={(e) => updateReturnPt(e.target.value)}
             style={inputStyle}
           />
         </div>
@@ -1380,9 +1512,7 @@ function SettingsTab({
         <button
           onClick={() => {
             if (confirm("このリーグの全データを削除しますか？")) {
-              setPlayers([]);
-              setGames([]);
-              setCfg(defaultCfg);
+              resetLeagueData();
             }
           }}
           style={{
