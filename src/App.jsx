@@ -66,6 +66,8 @@ function calcPoints(entries, cfg) {
 
 export default function App() {
   const [tab, setTab] = useState("record");
+  const [selectedPlayerId, setSelectedPlayerId] = useState("");
+
   const [players, setPlayers] = useState([]);
   const [games, setGames] = useState([]);
   const [cfg, setCfg] = useState(defaultCfg);
@@ -101,6 +103,12 @@ export default function App() {
   ];
 
   useEffect(() => {
+    if ("serviceWorker" in navigator && import.meta.env.PROD) {
+      navigator.serviceWorker.register("/sw.js").catch(console.error);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!canAdmin && tab === "settings") {
       setTab("record");
     }
@@ -127,6 +135,7 @@ export default function App() {
       setPlayers([]);
       setGames([]);
       setCfg(defaultCfg);
+      setSelectedPlayerId("");
     });
 
     return () => unsub();
@@ -543,16 +552,52 @@ export default function App() {
       return;
     }
 
+    const savedGame = {
+      ...game,
+      createdByUid: user.uid,
+      createdByName: profile?.displayName || "名前未設定",
+    };
+
     try {
-      setGames(sortGames([game, ...games]));
+      setGames(sortGames([savedGame, ...games]));
 
       await updateDoc(doc(db, "leagues", activeLeagueId), {
-        games: arrayUnion(game),
+        games: arrayUnion(savedGame),
         updatedAt: Date.now(),
       });
     } catch (e) {
       console.error(e);
       alert("対局結果の保存に失敗しました。");
+    }
+  }
+
+  async function updateGameInLeague(updatedGame) {
+    if (!canAdmin || !activeLeagueId) return;
+
+    const now = Date.now();
+
+    const editedGame = {
+      ...updatedGame,
+      editedAt: now,
+      editedDate: new Date(now).toLocaleString("ja-JP"),
+      editedByUid: user.uid,
+      editedByName: profile?.displayName || "管理者",
+    };
+
+    const nextGames = sortGames(
+      games.map((g) => (g.id === editedGame.id ? editedGame : g))
+    );
+
+    try {
+      setGames(nextGames);
+
+      await updateDoc(doc(db, "leagues", activeLeagueId), {
+        games: nextGames,
+        updatedAt: Date.now(),
+      });
+    } catch (e) {
+      console.error(e);
+      alert("対局履歴の編集に失敗しました。");
     }
   }
 
@@ -762,7 +807,10 @@ export default function App() {
                 {tabs.map(([k, v]) => (
                   <button
                     key={k}
-                    onClick={() => setTab(k)}
+                    onClick={() => {
+                      setTab(k);
+                      if (k !== "playerDetail") setSelectedPlayerId("");
+                    }}
                     style={{
                       padding: "9px 0",
                       borderRadius: 8,
@@ -790,12 +838,35 @@ export default function App() {
                 <HistoryTab
                   players={players}
                   games={games}
+                  cfg={cfg}
+                  updateGameInLeague={updateGameInLeague}
                   deleteGame={deleteGame}
                   canAdmin={canAdmin}
                 />
               )}
 
-              {tab === "stats" && <StatsTab players={players} games={games} />}
+              {tab === "stats" && (
+                <StatsTab
+                  players={players}
+                  games={games}
+                  openPlayerDetail={(playerId) => {
+                    setSelectedPlayerId(playerId);
+                    setTab("playerDetail");
+                  }}
+                />
+              )}
+
+              {tab === "playerDetail" && (
+                <PlayerDetailTab
+                  playerId={selectedPlayerId}
+                  players={players}
+                  games={games}
+                  goBack={() => {
+                    setSelectedPlayerId("");
+                    setTab("stats");
+                  }}
+                />
+              )}
 
               {tab === "settings" && canAdmin && (
                 <SettingsTab
@@ -1001,15 +1072,25 @@ function LeagueInfo({ leagueName, activeLeagueId, memberCount, inviteUrl, canAdm
 }
 
 function RecordTab({ players, saveGameToLeague, cfg, canSaveGame }) {
+  const activePlayers = useMemo(
+    () => players.filter((p) => !p.hidden),
+    [players]
+  );
+
   const [selected, setSelected] = useState([]);
   const [scores, setScores] = useState({});
   const [preview, setPreview] = useState(null);
 
-  if (players.length < 4) {
+  useEffect(() => {
+    const activeIds = activePlayers.map((p) => p.id);
+    setSelected((prev) => prev.filter((id) => activeIds.includes(id)));
+  }, [activePlayers]);
+
+  if (activePlayers.length < 4) {
     return (
       <Card>
         <p style={centerMutedStyle}>
-          管理者が設定タブでプレイヤーを4人以上追加すると記録できます。
+          管理者が設定タブで表示中のプレイヤーを4人以上にすると記録できます。
         </p>
       </Card>
     );
@@ -1067,7 +1148,7 @@ function RecordTab({ players, saveGameToLeague, cfg, canSaveGame }) {
       <Card>
         <Label>参加者選択（{selected.length}/4）</Label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {players.map((p) => {
+          {activePlayers.map((p) => {
             const active = selected.includes(p.id);
             return (
               <button
@@ -1165,7 +1246,16 @@ function RecordTab({ players, saveGameToLeague, cfg, canSaveGame }) {
   );
 }
 
-function HistoryTab({ players, games, deleteGame, canAdmin }) {
+function HistoryTab({
+  players,
+  games,
+  cfg,
+  updateGameInLeague,
+  deleteGame,
+  canAdmin,
+}) {
+  const [editingGameId, setEditingGameId] = useState("");
+
   if (games.length === 0) {
     return (
       <Card>
@@ -1185,41 +1275,65 @@ function HistoryTab({ players, games, deleteGame, canAdmin }) {
             borderBottom: `1px solid ${C.border}`,
           }}
         >
-          <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>
-            {g.date}
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 6, lineHeight: 1.6 }}>
+            <div>{g.date}</div>
+            <div>入力: {g.createdByName || "不明"}</div>
+            {g.editedByName && (
+              <div>
+                編集: {g.editedByName} / {g.editedDate || ""}
+              </div>
+            )}
           </div>
 
-          {[...g.entries]
-            .sort((a, b) => a.rank - b.rank)
-            .map((e) => {
-              const p = players.find((x) => x.id === e.playerId);
-              return (
-                <ResultRow
-                  key={e.playerId}
-                  rank={e.rank}
-                  name={p?.name || "不明"}
-                  score={e.score}
-                  pt={e.pt}
-                />
-              );
-            })}
-
-          {canAdmin && (
-            <button
-              onClick={() => deleteGame(g.id)}
-              style={{
-                marginTop: 8,
-                width: "100%",
-                padding: 8,
-                borderRadius: 8,
-                border: `1px solid ${C.red}`,
-                background: "transparent",
-                color: C.red,
-                cursor: "pointer",
+          {editingGameId === g.id ? (
+            <EditGameForm
+              game={g}
+              players={players}
+              cfg={cfg}
+              onCancel={() => setEditingGameId("")}
+              onSave={async (updatedGame) => {
+                await updateGameInLeague(updatedGame);
+                setEditingGameId("");
               }}
-            >
-              削除
-            </button>
+            />
+          ) : (
+            <>
+              {[...g.entries]
+                .sort((a, b) => a.rank - b.rank)
+                .map((e) => {
+                  const p = players.find((x) => x.id === e.playerId);
+                  return (
+                    <ResultRow
+                      key={e.playerId}
+                      rank={e.rank}
+                      name={p?.name || "不明"}
+                      score={e.score}
+                      pt={e.pt}
+                    />
+                  );
+                })}
+
+              {canAdmin && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <button
+                    onClick={() => setEditingGameId(g.id)}
+                    style={smallGoldFullButtonStyle}
+                  >
+                    編集
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (confirm("この対局履歴を削除しますか？")) {
+                        deleteGame(g.id);
+                      }
+                    }}
+                    style={smallDangerFullButtonStyle}
+                  >
+                    削除
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       ))}
@@ -1227,7 +1341,100 @@ function HistoryTab({ players, games, deleteGame, canAdmin }) {
   );
 }
 
-function StatsTab({ players, games }) {
+function EditGameForm({ game, players, cfg, onCancel, onSave }) {
+  const [scores, setScores] = useState(() => {
+    const obj = {};
+    game.entries.forEach((e) => {
+      obj[e.playerId] = e.score;
+    });
+    return obj;
+  });
+
+  const allFilled = game.entries.every(
+    (e) => scores[e.playerId] !== "" && scores[e.playerId] !== undefined
+  );
+
+  const total = allFilled
+    ? game.entries.reduce((a, e) => a + Number(scores[e.playerId]), 0)
+    : null;
+
+  function saveEdit() {
+    if (!allFilled) {
+      alert("全員分の点数を入力してください。");
+      return;
+    }
+
+    const entries = game.entries.map((e) => ({
+      playerId: e.playerId,
+      score: Number(scores[e.playerId]),
+    }));
+
+    const recalculated = calcPoints(entries, cfg);
+
+    onSave({
+      ...game,
+      entries: recalculated,
+    });
+  }
+
+  return (
+    <div
+      style={{
+        background: "#101020",
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: 10,
+      }}
+    >
+      <div style={{ color: C.gold, fontSize: 12, fontWeight: 700, marginBottom: 10 }}>
+        点数を編集
+      </div>
+
+      {game.entries.map((e) => {
+        const p = players.find((x) => x.id === e.playerId);
+        return (
+          <div key={e.playerId} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <div style={{ width: 80, color: C.muted, paddingTop: 9 }}>
+              {p?.name || "不明"}
+            </div>
+            <input
+              type="number"
+              value={scores[e.playerId] || ""}
+              onChange={(ev) =>
+                setScores({ ...scores, [e.playerId]: ev.target.value })
+              }
+              style={inputStyle}
+            />
+          </div>
+        );
+      })}
+
+      {total !== null && (
+        <div
+          style={{
+            textAlign: "right",
+            fontSize: 12,
+            color: total === 100000 ? C.green : C.red,
+            marginBottom: 8,
+          }}
+        >
+          合計: {total.toLocaleString()}点
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <button onClick={onCancel} style={smallMutedFullButtonStyle}>
+          キャンセル
+        </button>
+        <button onClick={saveEdit} style={smallGoldFullButtonStyle}>
+          保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StatsTab({ players, games, openPlayerDetail }) {
   const stats = useMemo(() => {
     return players
       .map((p) => {
@@ -1253,6 +1460,7 @@ function StatsTab({ players, games }) {
           lastRate: n ? Math.round((lasts / n) * 100) : 0,
         };
       })
+      .filter((p) => !p.hidden || p.n > 0)
       .sort((a, b) => b.totalPt - a.totalPt);
   }, [players, games]);
 
@@ -1263,23 +1471,34 @@ function StatsTab({ players, games }) {
         <p style={centerMutedStyle}>プレイヤーがいません。</p>
       ) : (
         stats.map((s, i) => (
-          <div
+          <button
             key={s.id}
+            onClick={() => openPlayerDetail(s.id)}
             style={{
+              width: "100%",
               padding: "12px 0",
+              border: "none",
               borderBottom: `1px solid ${C.border}`,
+              background: "transparent",
+              color: C.text,
               display: "flex",
               justifyContent: "space-between",
               gap: 12,
+              textAlign: "left",
+              cursor: "pointer",
             }}
           >
             <div>
               <div style={{ fontWeight: 700 }}>
                 {i + 1}位　{s.name}
+                {s.hidden ? "（非表示中）" : ""}
               </div>
-              <div style={{ fontSize: 11, color: C.muted }}>
+              <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.6 }}>
                 {s.n}半荘 / 平均順位 {s.avgRank} / トップ率 {s.topRate}% /
                 四着率 {s.lastRate}%
+              </div>
+              <div style={{ fontSize: 11, color: C.gold, marginTop: 2 }}>
+                詳細を見る →
               </div>
             </div>
             <div
@@ -1291,10 +1510,192 @@ function StatsTab({ players, games }) {
             >
               {fmtPt(s.totalPt)}
             </div>
-          </div>
+          </button>
         ))
       )}
     </Card>
+  );
+}
+
+function PlayerDetailTab({ playerId, players, games, goBack }) {
+  const player = players.find((p) => p.id === playerId);
+
+  const entries = useMemo(() => {
+    return games
+      .flatMap((g) =>
+        g.entries
+          .filter((e) => e.playerId === playerId)
+          .map((e) => ({
+            ...e,
+            gameId: g.id,
+            date: g.date,
+            createdAt: g.createdAt || 0,
+            createdByName: g.createdByName || "不明",
+            opponents: g.entries
+              .filter((x) => x.playerId !== playerId)
+              .map((x) => players.find((p) => p.id === x.playerId)?.name || "不明"),
+          }))
+      )
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }, [games, playerId, players]);
+
+  if (!player) {
+    return (
+      <Card>
+        <p style={centerMutedStyle}>プレイヤーが見つかりません。</p>
+        <button onClick={goBack} style={loginBtnStyle}>
+          ランキングに戻る
+        </button>
+      </Card>
+    );
+  }
+
+  const n = entries.length;
+  const totalPt = entries.reduce((a, e) => a + e.pt, 0);
+  const avgPt = n ? totalPt / n : 0;
+  const avgRank = n ? entries.reduce((a, e) => a + e.rank + 1, 0) / n : 0;
+
+  const rankCounts = [0, 1, 2, 3].map(
+    (rank) => entries.filter((e) => e.rank === rank).length
+  );
+
+  const rate = (count) => (n ? Math.round((count / n) * 100) : 0);
+
+  const scores = entries.map((e) => Number(e.score));
+  const pts = entries.map((e) => Number(e.pt));
+
+  const maxScore = n ? Math.max(...scores) : "-";
+  const minScore = n ? Math.min(...scores) : "-";
+  const maxPt = n ? Math.max(...pts) : "-";
+  const minPt = n ? Math.min(...pts) : "-";
+
+  const recent = entries.slice(0, 10);
+
+  return (
+    <>
+      <Card>
+        <button
+          onClick={goBack}
+          style={{
+            border: "none",
+            background: "transparent",
+            color: C.muted,
+            cursor: "pointer",
+            marginBottom: 12,
+          }}
+        >
+          ← ランキングに戻る
+        </button>
+
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: 12, color: C.muted, marginBottom: 4 }}>
+            個人成績
+          </div>
+          <div style={{ fontSize: 24, color: C.gold, fontWeight: 700 }}>
+            {player.name}
+          </div>
+          <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
+            {n}半荘 {player.hidden ? " / 非表示中" : ""}
+          </div>
+        </div>
+      </Card>
+
+      <Card>
+        <Label>総合成績</Label>
+        <div style={detailGridStyle}>
+          <MiniStat
+            label="総ポイント"
+            value={fmtPt(Math.round(totalPt * 10) / 10)}
+            strong
+          />
+          <MiniStat
+            label="平均ポイント"
+            value={n ? fmtPt(Math.round(avgPt * 10) / 10) : "-"}
+          />
+          <MiniStat
+            label="平均順位"
+            value={n ? Math.round(avgRank * 100) / 100 : "-"}
+          />
+          <MiniStat label="対局数" value={`${n}半荘`} />
+        </div>
+      </Card>
+
+      <Card>
+        <Label>順位率</Label>
+        <div style={detailGridStyle}>
+          <MiniStat label="トップ率" value={`${rate(rankCounts[0])}%`} />
+          <MiniStat label="二着率" value={`${rate(rankCounts[1])}%`} />
+          <MiniStat label="三着率" value={`${rate(rankCounts[2])}%`} />
+          <MiniStat label="四着率" value={`${rate(rankCounts[3])}%`} />
+        </div>
+      </Card>
+
+      <Card>
+        <Label>最高・最低</Label>
+        <div style={detailGridStyle}>
+          <MiniStat
+            label="最高得点"
+            value={n ? `${Number(maxScore).toLocaleString()}点` : "-"}
+          />
+          <MiniStat
+            label="最低得点"
+            value={n ? `${Number(minScore).toLocaleString()}点` : "-"}
+          />
+          <MiniStat
+            label="最高pt"
+            value={n ? fmtPt(Math.round(maxPt * 10) / 10) : "-"}
+          />
+          <MiniStat
+            label="最低pt"
+            value={n ? fmtPt(Math.round(minPt * 10) / 10) : "-"}
+          />
+        </div>
+      </Card>
+
+      <Card>
+        <Label>直近成績</Label>
+        {recent.length === 0 ? (
+          <p style={centerMutedStyle}>まだ対局履歴がありません。</p>
+        ) : (
+          recent.map((e) => (
+            <div
+              key={e.gameId}
+              style={{
+                padding: "10px 0",
+                borderBottom: `1px solid ${C.border}`,
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 700 }}>
+                  {e.rank + 1}位 / {Number(e.score).toLocaleString()}点
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
+                  {e.date}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
+                  入力: {e.createdByName}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
+                  対戦: {e.opponents.join("・")}
+                </div>
+              </div>
+              <div
+                style={{
+                  fontSize: 18,
+                  fontWeight: 700,
+                  color: e.pt >= 0 ? C.green : C.red,
+                }}
+              >
+                {fmtPt(e.pt)}
+              </div>
+            </div>
+          ))
+        )}
+      </Card>
+    </>
   );
 }
 
@@ -1321,12 +1722,30 @@ function SettingsTab({
 
   function addPlayer() {
     if (!name.trim()) return;
-    savePlayersToDb([...players, { id: uid(), name: name.trim() }]);
+    savePlayersToDb([
+      ...players,
+      {
+        id: uid(),
+        name: name.trim(),
+        hidden: false,
+        createdAt: Date.now(),
+      },
+    ]);
     setName("");
   }
 
-  function removePlayer(playerId) {
-    savePlayersToDb(players.filter((x) => x.id !== playerId));
+  function setPlayerHidden(playerId, hidden) {
+    savePlayersToDb(
+      players.map((p) =>
+        p.id === playerId
+          ? {
+              ...p,
+              hidden,
+              updatedAt: Date.now(),
+            }
+          : p
+      )
+    );
   }
 
   function updateUma(index, value) {
@@ -1450,22 +1869,36 @@ function SettingsTab({
             style={{
               display: "flex",
               justifyContent: "space-between",
+              alignItems: "center",
+              gap: 8,
               padding: "9px 0",
               borderBottom: `1px solid ${C.border}`,
             }}
           >
-            <span>{p.name}</span>
-            <button
-              onClick={() => removePlayer(p.id)}
-              style={{
-                border: "none",
-                background: "transparent",
-                color: C.red,
-                cursor: "pointer",
-              }}
-            >
-              削除
-            </button>
+            <div>
+              <div>{p.name}</div>
+              {p.hidden && (
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                  非表示中
+                </div>
+              )}
+            </div>
+
+            {p.hidden ? (
+              <button
+                onClick={() => setPlayerHidden(p.id, false)}
+                style={smallGoldButtonStyle}
+              >
+                再表示
+              </button>
+            ) : (
+              <button
+                onClick={() => setPlayerHidden(p.id, true)}
+                style={smallDangerButtonStyle}
+              >
+                非表示
+              </button>
+            )}
           </div>
         ))}
       </Card>
@@ -1617,6 +2050,37 @@ function ResultRow({ rank, name, score, pt }) {
   );
 }
 
+function MiniStat({ label, value, strong }) {
+  return (
+    <div
+      style={{
+        background: C.panel,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: 10,
+      }}
+    >
+      <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>
+        {label}
+      </div>
+      <div
+        style={{
+          fontSize: strong ? 19 : 16,
+          fontWeight: 700,
+          color:
+            typeof value === "string" && value.startsWith("+")
+              ? C.green
+              : typeof value === "string" && value.startsWith("-")
+              ? C.red
+              : C.text,
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
 const appBgStyle = {
   minHeight: "100vh",
   background: C.bg,
@@ -1634,6 +2098,12 @@ const tabGridStyle = {
   gridTemplateColumns: "repeat(4, 1fr)",
   gap: 6,
   marginBottom: 16,
+};
+
+const detailGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, 1fr)",
+  gap: 8,
 };
 
 const centerMutedStyle = {
@@ -1721,4 +2191,37 @@ const smallDangerButtonStyle = {
   color: C.red,
   cursor: "pointer",
   whiteSpace: "nowrap",
+};
+
+const smallGoldFullButtonStyle = {
+  width: "100%",
+  marginTop: 8,
+  padding: 8,
+  borderRadius: 8,
+  border: `1px solid ${C.gold}`,
+  background: C.surface,
+  color: C.gold,
+  cursor: "pointer",
+};
+
+const smallDangerFullButtonStyle = {
+  width: "100%",
+  marginTop: 8,
+  padding: 8,
+  borderRadius: 8,
+  border: `1px solid ${C.red}`,
+  background: "transparent",
+  color: C.red,
+  cursor: "pointer",
+};
+
+const smallMutedFullButtonStyle = {
+  width: "100%",
+  marginTop: 8,
+  padding: 8,
+  borderRadius: 8,
+  border: `1px solid ${C.border}`,
+  background: "transparent",
+  color: C.muted,
+  cursor: "pointer",
 };
