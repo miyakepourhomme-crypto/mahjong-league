@@ -98,16 +98,22 @@ export default function App() {
     async function loadProfile() {
       setProfileLoading(true);
 
-      const ref = doc(db, "users", user.uid);
-      const snap = await getDoc(ref);
+      try {
+        const ref = doc(db, "users", user.uid);
+        const snap = await getDoc(ref);
 
-      if (snap.exists()) {
-        setProfile(snap.data());
-      } else {
+        if (snap.exists()) {
+          setProfile(snap.data());
+        } else {
+          setProfile(null);
+        }
+      } catch (e) {
+        console.error(e);
         setProfile(null);
+        setLeagueError("プロフィールの読み込みに失敗しました。");
+      } finally {
+        setProfileLoading(false);
       }
-
-      setProfileLoading(false);
     }
 
     loadProfile();
@@ -120,20 +126,32 @@ export default function App() {
       setLeagueReady(false);
       setLeagueError("");
 
-      const params = new URLSearchParams(window.location.search);
-      const inviteLeagueId = params.get("league");
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const inviteLeagueId = params.get("league");
 
-      if (inviteLeagueId) {
-        await joinLeague(inviteLeagueId);
-        return;
+        if (inviteLeagueId) {
+          if (profile.activeLeagueId !== inviteLeagueId) {
+            await joinLeague(inviteLeagueId);
+            return;
+          }
+
+          await loadLeagueById(inviteLeagueId);
+          return;
+        }
+
+        if (profile.activeLeagueId) {
+          await loadLeagueById(profile.activeLeagueId);
+          return;
+        }
+
+        setLeagueReady(true);
+      } catch (e) {
+        console.error(e);
+        setLeagueError("リーグ情報の準備に失敗しました。");
+        setActiveLeagueId("");
+        setLeagueReady(true);
       }
-
-      if (profile.activeLeagueId) {
-        await loadLeagueById(profile.activeLeagueId);
-        return;
-      }
-
-      setLeagueReady(true);
     }
 
     prepareLeague();
@@ -143,18 +161,23 @@ export default function App() {
     if (!user || !profile || !leagueReady || !activeLeagueId) return;
 
     async function saveLeagueData() {
-      const ref = doc(db, "leagues", activeLeagueId);
+      try {
+        const ref = doc(db, "leagues", activeLeagueId);
 
-      await setDoc(
-        ref,
-        {
-          players,
-          games,
-          cfg,
-          updatedAt: Date.now(),
-        },
-        { merge: true }
-      );
+        await setDoc(
+          ref,
+          {
+            players,
+            games,
+            cfg,
+            updatedAt: Date.now(),
+          },
+          { merge: true }
+        );
+      } catch (e) {
+        console.error(e);
+        setLeagueError("リーグデータの保存に失敗しました。");
+      }
     }
 
     saveLeagueData();
@@ -177,8 +200,30 @@ export default function App() {
       updatedAt: Date.now(),
     };
 
-    await setDoc(doc(db, "users", user.uid), newProfile);
-    setProfile(newProfile);
+    try {
+      await setDoc(doc(db, "users", user.uid), newProfile);
+      setProfile(newProfile);
+    } catch (e) {
+      console.error(e);
+      alert("ユーザー名の登録に失敗しました。");
+    }
+  }
+
+  async function clearActiveLeague() {
+    if (!user || !profile) return;
+
+    const updatedProfile = {
+      ...profile,
+      activeLeagueId: "",
+      updatedAt: Date.now(),
+    };
+
+    try {
+      await setDoc(doc(db, "users", user.uid), updatedProfile, { merge: true });
+      setProfile(updatedProfile);
+    } catch (e) {
+      console.error(e);
+    }
   }
 
   async function loadLeagueById(leagueId) {
@@ -187,33 +232,60 @@ export default function App() {
     setLeagueReady(false);
     setLeagueError("");
 
-    const ref = doc(db, "leagues", leagueId);
-    const snap = await getDoc(ref);
+    try {
+      const ref = doc(db, "leagues", leagueId);
+      const snap = await getDoc(ref);
 
-    if (!snap.exists()) {
-      setLeagueError("リーグが見つかりません。");
-      setActiveLeagueId("");
+      if (!snap.exists()) {
+        setLeagueError("リーグが見つかりません。新しく作成してください。");
+        setActiveLeagueId("");
+        setLeagueName("");
+        setLeagueOwnerUid("");
+        setLeagueMemberUids([]);
+        setPlayers([]);
+        setGames([]);
+        setCfg(defaultCfg);
+        await clearActiveLeague();
+        setLeagueReady(true);
+        return;
+      }
+
+      const data = snap.data();
+
+      if (!data.memberUids?.includes(user.uid)) {
+        setLeagueError("このリーグに参加していません。招待URLから参加してください。");
+        setActiveLeagueId("");
+        setLeagueName("");
+        setLeagueOwnerUid("");
+        setLeagueMemberUids([]);
+        setPlayers([]);
+        setGames([]);
+        setCfg(defaultCfg);
+        await clearActiveLeague();
+        setLeagueReady(true);
+        return;
+      }
+
+      setActiveLeagueId(leagueId);
+      setLeagueName(data.name || "名称未設定のリーグ");
+      setLeagueOwnerUid(data.ownerUid || "");
+      setLeagueMemberUids(data.memberUids || []);
+      setPlayers(data.players || []);
+      setGames(data.games || []);
+      setCfg(data.cfg || defaultCfg);
       setLeagueReady(true);
-      return;
-    }
-
-    const data = snap.data();
-
-    if (!data.memberUids?.includes(user.uid)) {
-      setLeagueError("このリーグに参加していません。招待URLから参加してください。");
+    } catch (e) {
+      console.error(e);
+      setLeagueError("リーグ情報の読み込みに失敗しました。Firestoreルールを確認してください。");
       setActiveLeagueId("");
+      setLeagueName("");
+      setLeagueOwnerUid("");
+      setLeagueMemberUids([]);
+      setPlayers([]);
+      setGames([]);
+      setCfg(defaultCfg);
       setLeagueReady(true);
-      return;
     }
-
-    setActiveLeagueId(leagueId);
-    setLeagueName(data.name || "名称未設定のリーグ");
-    setLeagueOwnerUid(data.ownerUid || "");
-    setLeagueMemberUids(data.memberUids || []);
-    setPlayers(data.players || []);
-    setGames(data.games || []);
-    setCfg(data.cfg || defaultCfg);
-    setLeagueReady(true);
   }
 
   async function createLeague(name) {
@@ -225,39 +297,48 @@ export default function App() {
       return;
     }
 
-    const leagueId = uid();
+    setLeagueReady(false);
+    setLeagueError("");
 
-    const newLeague = {
-      name: cleanName,
-      ownerUid: user.uid,
-      memberUids: [user.uid],
-      inviteEnabled: true,
-      players: [],
-      games: [],
-      cfg: defaultCfg,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
+    try {
+      const leagueId = uid();
 
-    await setDoc(doc(db, "leagues", leagueId), newLeague);
+      const newLeague = {
+        name: cleanName,
+        ownerUid: user.uid,
+        memberUids: [user.uid],
+        inviteEnabled: true,
+        players: [],
+        games: [],
+        cfg: defaultCfg,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
 
-    const updatedProfile = {
-      ...profile,
-      activeLeagueId: leagueId,
-      updatedAt: Date.now(),
-    };
+      await setDoc(doc(db, "leagues", leagueId), newLeague);
 
-    await setDoc(doc(db, "users", user.uid), updatedProfile, { merge: true });
+      const updatedProfile = {
+        ...profile,
+        activeLeagueId: leagueId,
+        updatedAt: Date.now(),
+      };
 
-    setProfile(updatedProfile);
-    setActiveLeagueId(leagueId);
-    setLeagueName(cleanName);
-    setLeagueOwnerUid(user.uid);
-    setLeagueMemberUids([user.uid]);
-    setPlayers([]);
-    setGames([]);
-    setCfg(defaultCfg);
-    setLeagueReady(true);
+      await setDoc(doc(db, "users", user.uid), updatedProfile, { merge: true });
+
+      setProfile(updatedProfile);
+      setActiveLeagueId(leagueId);
+      setLeagueName(cleanName);
+      setLeagueOwnerUid(user.uid);
+      setLeagueMemberUids([user.uid]);
+      setPlayers([]);
+      setGames([]);
+      setCfg(defaultCfg);
+      setLeagueReady(true);
+    } catch (e) {
+      console.error(e);
+      setLeagueError("リーグ作成に失敗しました。Firestoreルールを確認してください。");
+      setLeagueReady(true);
+    }
   }
 
   async function joinLeague(leagueId) {
@@ -266,34 +347,47 @@ export default function App() {
     setLeagueReady(false);
     setLeagueError("");
 
-    const ref = doc(db, "leagues", leagueId);
-    const snap = await getDoc(ref);
+    try {
+      const ref = doc(db, "leagues", leagueId);
+      const snap = await getDoc(ref);
 
-    if (!snap.exists()) {
-      setLeagueError("招待されたリーグが見つかりません。");
-      setLeagueReady(true);
-      return;
-    }
+      if (!snap.exists()) {
+        setLeagueError("招待されたリーグが見つかりません。");
+        setLeagueReady(true);
+        return;
+      }
 
-    const data = snap.data();
+      const data = snap.data();
 
-    if (!data.memberUids?.includes(user.uid)) {
-      await updateDoc(ref, {
-        memberUids: arrayUnion(user.uid),
+      if (!data.inviteEnabled && !data.memberUids?.includes(user.uid)) {
+        setLeagueError("このリーグの招待は無効です。");
+        setLeagueReady(true);
+        return;
+      }
+
+      if (!data.memberUids?.includes(user.uid)) {
+        await updateDoc(ref, {
+          memberUids: arrayUnion(user.uid),
+          updatedAt: Date.now(),
+        });
+      }
+
+      const updatedProfile = {
+        ...profile,
+        activeLeagueId: leagueId,
         updatedAt: Date.now(),
-      });
+      };
+
+      await setDoc(doc(db, "users", user.uid), updatedProfile, { merge: true });
+      setProfile(updatedProfile);
+
+      await loadLeagueById(leagueId);
+    } catch (e) {
+      console.error(e);
+      setLeagueError("リーグ参加に失敗しました。Firestoreルールを確認してください。");
+      setActiveLeagueId("");
+      setLeagueReady(true);
     }
-
-    const updatedProfile = {
-      ...profile,
-      activeLeagueId: leagueId,
-      updatedAt: Date.now(),
-    };
-
-    await setDoc(doc(db, "users", user.uid), updatedProfile, { merge: true });
-    setProfile(updatedProfile);
-
-    await loadLeagueById(leagueId);
   }
 
   const inviteUrl = activeLeagueId
@@ -344,19 +438,28 @@ export default function App() {
           ) : !activeLeagueId ? (
             <>
               <UserCard profile={profile} user={user} />
+
               {leagueError && (
                 <Card>
-                  <p style={{ color: C.red, textAlign: "center", padding: 12 }}>
+                  <p style={{ color: C.red, textAlign: "center", padding: 12, lineHeight: 1.7 }}>
                     {leagueError}
                   </p>
                 </Card>
               )}
+
               <LeagueSetup createLeague={createLeague} />
-              <LogoutCard />
             </>
           ) : (
             <>
               <UserCard profile={profile} user={user} />
+
+              {leagueError && (
+                <Card>
+                  <p style={{ color: C.red, textAlign: "center", padding: 12, lineHeight: 1.7 }}>
+                    {leagueError}
+                  </p>
+                </Card>
+              )}
 
               <LeagueInfo
                 leagueName={leagueName}
@@ -523,23 +626,10 @@ function UserCard({ profile, user }) {
         >
           {profile.displayName}
         </div>
-        <div style={{ fontSize: 12, color: C.green, marginBottom: 12 }}>
-          {user.email}
-        </div>
         <button onClick={() => signOut(auth)} style={loginBtnStyle}>
           ログアウト
         </button>
       </div>
-    </Card>
-  );
-}
-
-function LogoutCard() {
-  return (
-    <Card>
-      <button onClick={() => signOut(auth)} style={loginBtnStyle}>
-        ログアウト
-      </button>
     </Card>
   );
 }
@@ -574,8 +664,12 @@ function LeagueSetup({ createLeague }) {
 
 function LeagueInfo({ leagueName, activeLeagueId, memberCount, inviteUrl }) {
   async function copyInviteUrl() {
-    await navigator.clipboard.writeText(inviteUrl);
-    alert("招待URLをコピーしました。");
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      alert("招待URLをコピーしました。");
+    } catch {
+      alert(inviteUrl);
+    }
   }
 
   return (
@@ -895,6 +989,10 @@ function SettingsTab({
   const [name, setName] = useState("");
   const [editingLeagueName, setEditingLeagueName] = useState(leagueName);
 
+  useEffect(() => {
+    setEditingLeagueName(leagueName);
+  }, [leagueName]);
+
   function addPlayer() {
     if (!name.trim()) return;
     setPlayers([...players, { id: uid(), name: name.trim() }]);
@@ -907,16 +1005,21 @@ function SettingsTab({
       return;
     }
 
-    await setDoc(
-      doc(db, "leagues", activeLeagueId),
-      {
-        name: editingLeagueName.trim(),
-        updatedAt: Date.now(),
-      },
-      { merge: true }
-    );
+    try {
+      await setDoc(
+        doc(db, "leagues", activeLeagueId),
+        {
+          name: editingLeagueName.trim(),
+          updatedAt: Date.now(),
+        },
+        { merge: true }
+      );
 
-    setLeagueName(editingLeagueName.trim());
+      setLeagueName(editingLeagueName.trim());
+    } catch (e) {
+      console.error(e);
+      alert("リーグ名の保存に失敗しました。");
+    }
   }
 
   return (
