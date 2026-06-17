@@ -65,8 +65,31 @@ export default function App() {
   const [leagueName, setLeagueName] = useState("");
   const [leagueOwnerUid, setLeagueOwnerUid] = useState("");
   const [leagueMemberUids, setLeagueMemberUids] = useState([]);
+  const [leagueAdminUids, setLeagueAdminUids] = useState([]);
+  const [memberProfiles, setMemberProfiles] = useState([]);
   const [leagueReady, setLeagueReady] = useState(false);
   const [leagueError, setLeagueError] = useState("");
+
+  const canMember =
+    !!user && !!activeLeagueId && leagueMemberUids.includes(user.uid);
+
+  const canAdmin =
+    !!user &&
+    !!activeLeagueId &&
+    (leagueOwnerUid === user.uid || leagueAdminUids.includes(user.uid));
+
+  const tabs = [
+    ["record", "記録"],
+    ["history", "履歴"],
+    ["stats", "成績"],
+    ...(canAdmin ? [["settings", "設定"]] : []),
+  ];
+
+  useEffect(() => {
+    if (!canAdmin && tab === "settings") {
+      setTab("record");
+    }
+  }, [canAdmin, tab]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
@@ -81,6 +104,8 @@ export default function App() {
       setLeagueName("");
       setLeagueOwnerUid("");
       setLeagueMemberUids([]);
+      setLeagueAdminUids([]);
+      setMemberProfiles([]);
       setLeagueReady(false);
       setLeagueError("");
 
@@ -158,22 +183,35 @@ export default function App() {
   }, [user, profile]);
 
   useEffect(() => {
-    if (!user || !profile || !leagueReady || !activeLeagueId) return;
+    if (!user || !profile || !leagueReady || !activeLeagueId || !canMember) {
+      return;
+    }
 
     async function saveLeagueData() {
       try {
         const ref = doc(db, "leagues", activeLeagueId);
 
-        await setDoc(
-          ref,
-          {
-            players,
-            games,
-            cfg,
-            updatedAt: Date.now(),
-          },
-          { merge: true }
-        );
+        if (canAdmin) {
+          await setDoc(
+            ref,
+            {
+              players,
+              games,
+              cfg,
+              updatedAt: Date.now(),
+            },
+            { merge: true }
+          );
+        } else {
+          await setDoc(
+            ref,
+            {
+              games,
+              updatedAt: Date.now(),
+            },
+            { merge: true }
+          );
+        }
       } catch (e) {
         console.error(e);
         setLeagueError("リーグデータの保存に失敗しました。");
@@ -181,7 +219,59 @@ export default function App() {
     }
 
     saveLeagueData();
-  }, [players, games, cfg, user, profile, leagueReady, activeLeagueId]);
+  }, [
+    players,
+    games,
+    cfg,
+    user,
+    profile,
+    leagueReady,
+    activeLeagueId,
+    canMember,
+    canAdmin,
+  ]);
+
+  useEffect(() => {
+    if (!leagueMemberUids.length) {
+      setMemberProfiles([]);
+      return;
+    }
+
+    async function loadMemberProfiles() {
+      try {
+        const list = await Promise.all(
+          leagueMemberUids.map(async (memberUid) => {
+            const snap = await getDoc(doc(db, "users", memberUid));
+
+            if (snap.exists()) {
+              const data = snap.data();
+              return {
+                uid: memberUid,
+                displayName: data.displayName || "名前未設定",
+              };
+            }
+
+            return {
+              uid: memberUid,
+              displayName: "名前未設定",
+            };
+          })
+        );
+
+        setMemberProfiles(list);
+      } catch (e) {
+        console.error(e);
+        setMemberProfiles(
+          leagueMemberUids.map((memberUid) => ({
+            uid: memberUid,
+            displayName: "ユーザー",
+          }))
+        );
+      }
+    }
+
+    loadMemberProfiles();
+  }, [leagueMemberUids]);
 
   async function saveProfile() {
     if (!user) return;
@@ -242,6 +332,7 @@ export default function App() {
         setLeagueName("");
         setLeagueOwnerUid("");
         setLeagueMemberUids([]);
+        setLeagueAdminUids([]);
         setPlayers([]);
         setGames([]);
         setCfg(defaultCfg);
@@ -258,6 +349,7 @@ export default function App() {
         setLeagueName("");
         setLeagueOwnerUid("");
         setLeagueMemberUids([]);
+        setLeagueAdminUids([]);
         setPlayers([]);
         setGames([]);
         setCfg(defaultCfg);
@@ -266,10 +358,30 @@ export default function App() {
         return;
       }
 
+      const ownerUid = data.ownerUid || "";
+      const adminUids =
+        data.adminUids && data.adminUids.length > 0
+          ? data.adminUids
+          : ownerUid
+          ? [ownerUid]
+          : [];
+
+      if ((!data.adminUids || data.adminUids.length === 0) && ownerUid === user.uid) {
+        await setDoc(
+          ref,
+          {
+            adminUids,
+            updatedAt: Date.now(),
+          },
+          { merge: true }
+        );
+      }
+
       setActiveLeagueId(leagueId);
       setLeagueName(data.name || "名称未設定のリーグ");
-      setLeagueOwnerUid(data.ownerUid || "");
+      setLeagueOwnerUid(ownerUid);
       setLeagueMemberUids(data.memberUids || []);
+      setLeagueAdminUids(adminUids);
       setPlayers(data.players || []);
       setGames(data.games || []);
       setCfg(data.cfg || defaultCfg);
@@ -281,6 +393,7 @@ export default function App() {
       setLeagueName("");
       setLeagueOwnerUid("");
       setLeagueMemberUids([]);
+      setLeagueAdminUids([]);
       setPlayers([]);
       setGames([]);
       setCfg(defaultCfg);
@@ -307,6 +420,7 @@ export default function App() {
         name: cleanName,
         ownerUid: user.uid,
         memberUids: [user.uid],
+        adminUids: [user.uid],
         inviteEnabled: true,
         players: [],
         games: [],
@@ -330,6 +444,7 @@ export default function App() {
       setLeagueName(cleanName);
       setLeagueOwnerUid(user.uid);
       setLeagueMemberUids([user.uid]);
+      setLeagueAdminUids([user.uid]);
       setPlayers([]);
       setGames([]);
       setCfg(defaultCfg);
@@ -390,6 +505,41 @@ export default function App() {
     }
   }
 
+  async function setAdminStatus(targetUid, shouldBeAdmin) {
+    if (!canAdmin || !activeLeagueId) return;
+
+    if (targetUid === leagueOwnerUid && !shouldBeAdmin) {
+      alert("リーグ作成者の管理者権限は解除できません。");
+      return;
+    }
+
+    const current = leagueAdminUids.length
+      ? leagueAdminUids
+      : leagueOwnerUid
+      ? [leagueOwnerUid]
+      : [];
+
+    let nextAdminUids = shouldBeAdmin
+      ? Array.from(new Set([...current, targetUid]))
+      : current.filter((uid) => uid !== targetUid);
+
+    if (leagueOwnerUid && !nextAdminUids.includes(leagueOwnerUid)) {
+      nextAdminUids = [leagueOwnerUid, ...nextAdminUids];
+    }
+
+    try {
+      await updateDoc(doc(db, "leagues", activeLeagueId), {
+        adminUids: nextAdminUids,
+        updatedAt: Date.now(),
+      });
+
+      setLeagueAdminUids(nextAdminUids);
+    } catch (e) {
+      console.error(e);
+      alert("権限変更に失敗しました。");
+    }
+  }
+
   const inviteUrl = activeLeagueId
     ? `${window.location.origin}${window.location.pathname}?league=${activeLeagueId}`
     : "";
@@ -437,13 +587,11 @@ export default function App() {
             </Card>
           ) : !activeLeagueId ? (
             <>
-              <UserCard profile={profile} user={user} />
+              <UserCard profile={profile} user={user} canAdmin={canAdmin} />
 
               {leagueError && (
                 <Card>
-                  <p style={{ color: C.red, textAlign: "center", padding: 12, lineHeight: 1.7 }}>
-                    {leagueError}
-                  </p>
+                  <p style={errorTextStyle}>{leagueError}</p>
                 </Card>
               )}
 
@@ -451,13 +599,11 @@ export default function App() {
             </>
           ) : (
             <>
-              <UserCard profile={profile} user={user} />
+              <UserCard profile={profile} user={user} canAdmin={canAdmin} />
 
               {leagueError && (
                 <Card>
-                  <p style={{ color: C.red, textAlign: "center", padding: 12, lineHeight: 1.7 }}>
-                    {leagueError}
-                  </p>
+                  <p style={errorTextStyle}>{leagueError}</p>
                 </Card>
               )}
 
@@ -466,15 +612,11 @@ export default function App() {
                 activeLeagueId={activeLeagueId}
                 memberCount={leagueMemberUids.length}
                 inviteUrl={inviteUrl}
+                canAdmin={canAdmin}
               />
 
               <div style={tabGridStyle}>
-                {[
-                  ["record", "記録"],
-                  ["history", "履歴"],
-                  ["stats", "成績"],
-                  ["settings", "設定"],
-                ].map(([k, v]) => (
+                {tabs.map(([k, v]) => (
                   <button
                     key={k}
                     onClick={() => setTab(k)}
@@ -498,6 +640,7 @@ export default function App() {
                   games={games}
                   setGames={setGames}
                   cfg={cfg}
+                  canSaveGame={canMember}
                 />
               )}
 
@@ -506,12 +649,13 @@ export default function App() {
                   players={players}
                   games={games}
                   setGames={setGames}
+                  canAdmin={canAdmin}
                 />
               )}
 
               {tab === "stats" && <StatsTab players={players} games={games} />}
 
-              {tab === "settings" && (
+              {tab === "settings" && canAdmin && (
                 <SettingsTab
                   players={players}
                   setPlayers={setPlayers}
@@ -522,6 +666,9 @@ export default function App() {
                   setLeagueName={setLeagueName}
                   activeLeagueId={activeLeagueId}
                   leagueOwnerUid={leagueOwnerUid}
+                  leagueAdminUids={leagueAdminUids}
+                  memberProfiles={memberProfiles}
+                  setAdminStatus={setAdminStatus}
                   user={user}
                 />
               )}
@@ -609,7 +756,7 @@ function ProfileSetup({ user, displayName, setDisplayName, saveProfile }) {
   );
 }
 
-function UserCard({ profile, user }) {
+function UserCard({ profile, user, canAdmin }) {
   return (
     <Card>
       <div style={{ textAlign: "center" }}>
@@ -621,10 +768,23 @@ function UserCard({ profile, user }) {
             fontSize: 18,
             color: C.gold,
             fontWeight: 700,
-            marginBottom: 4,
+            marginBottom: 6,
           }}
         >
           {profile.displayName}
+        </div>
+        <div
+          style={{
+            display: "inline-block",
+            fontSize: 11,
+            color: canAdmin ? C.gold : C.muted,
+            border: `1px solid ${canAdmin ? C.gold : C.border}`,
+            borderRadius: 999,
+            padding: "3px 10px",
+            marginBottom: 12,
+          }}
+        >
+          {canAdmin ? "管理者" : "一般ユーザー"}
         </div>
         <button onClick={() => signOut(auth)} style={loginBtnStyle}>
           ログアウト
@@ -662,7 +822,7 @@ function LeagueSetup({ createLeague }) {
   );
 }
 
-function LeagueInfo({ leagueName, activeLeagueId, memberCount, inviteUrl }) {
+function LeagueInfo({ leagueName, activeLeagueId, memberCount, inviteUrl, canAdmin }) {
   async function copyInviteUrl() {
     try {
       await navigator.clipboard.writeText(inviteUrl);
@@ -685,15 +845,21 @@ function LeagueInfo({ leagueName, activeLeagueId, memberCount, inviteUrl }) {
           ID: {activeLeagueId} / メンバー {memberCount}人
         </div>
 
-        <button onClick={copyInviteUrl} style={{ ...loginBtnStyle, marginTop: 12 }}>
-          招待URLをコピー
-        </button>
+        {canAdmin ? (
+          <button onClick={copyInviteUrl} style={{ ...loginBtnStyle, marginTop: 12 }}>
+            招待URLをコピー
+          </button>
+        ) : (
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 12 }}>
+            招待URLの共有は管理者のみ可能です。
+          </div>
+        )}
       </div>
     </Card>
   );
 }
 
-function RecordTab({ players, games, setGames, cfg }) {
+function RecordTab({ players, games, setGames, cfg, canSaveGame }) {
   const [selected, setSelected] = useState([]);
   const [scores, setScores] = useState({});
   const [preview, setPreview] = useState(null);
@@ -702,7 +868,7 @@ function RecordTab({ players, games, setGames, cfg }) {
     return (
       <Card>
         <p style={centerMutedStyle}>
-          設定タブでプレイヤーを4人以上追加してください。
+          管理者が設定タブでプレイヤーを4人以上追加すると記録できます。
         </p>
       </Card>
     );
@@ -734,6 +900,11 @@ function RecordTab({ players, games, setGames, cfg }) {
   }
 
   function saveGame() {
+    if (!canSaveGame) {
+      alert("保存するにはリーグ参加が必要です。");
+      return;
+    }
+
     const game = {
       id: uid(),
       date: new Date().toLocaleString("ja-JP"),
@@ -835,7 +1006,13 @@ function RecordTab({ players, games, setGames, cfg }) {
             })}
 
           <div style={{ marginTop: 12 }}>
-            <Btn onClick={saveGame}>保存する</Btn>
+            {canSaveGame ? (
+              <Btn onClick={saveGame}>保存する</Btn>
+            ) : (
+              <p style={centerSmallMutedStyle}>
+                保存するにはリーグ参加が必要です。
+              </p>
+            )}
           </div>
         </Card>
       )}
@@ -843,7 +1020,7 @@ function RecordTab({ players, games, setGames, cfg }) {
   );
 }
 
-function HistoryTab({ players, games, setGames }) {
+function HistoryTab({ players, games, setGames, canAdmin }) {
   if (games.length === 0) {
     return (
       <Card>
@@ -882,21 +1059,23 @@ function HistoryTab({ players, games, setGames }) {
               );
             })}
 
-          <button
-            onClick={() => setGames(games.filter((x) => x.id !== g.id))}
-            style={{
-              marginTop: 8,
-              width: "100%",
-              padding: 8,
-              borderRadius: 8,
-              border: `1px solid ${C.red}`,
-              background: "transparent",
-              color: C.red,
-              cursor: "pointer",
-            }}
-          >
-            削除
-          </button>
+          {canAdmin && (
+            <button
+              onClick={() => setGames(games.filter((x) => x.id !== g.id))}
+              style={{
+                marginTop: 8,
+                width: "100%",
+                padding: 8,
+                borderRadius: 8,
+                border: `1px solid ${C.red}`,
+                background: "transparent",
+                color: C.red,
+                cursor: "pointer",
+              }}
+            >
+              削除
+            </button>
+          )}
         </div>
       ))}
     </Card>
@@ -984,6 +1163,9 @@ function SettingsTab({
   setLeagueName,
   activeLeagueId,
   leagueOwnerUid,
+  leagueAdminUids,
+  memberProfiles,
+  setAdminStatus,
   user,
 }) {
   const [name, setName] = useState("");
@@ -1035,22 +1217,77 @@ function SettingsTab({
           />
           <button
             onClick={saveLeagueName}
-            style={{
-              padding: "0 14px",
-              borderRadius: 8,
-              border: `1px solid ${C.gold}`,
-              background: C.surface,
-              color: C.gold,
-              cursor: "pointer",
-            }}
+            style={smallGoldButtonStyle}
           >
             保存
           </button>
         </div>
-        {user.uid === leagueOwnerUid && (
-          <div style={{ color: C.muted, fontSize: 11, marginTop: 8 }}>
-            あなたはこのリーグの管理者です。
-          </div>
+        <div style={{ color: C.muted, fontSize: 11, marginTop: 8 }}>
+          あなたはこのリーグの管理者です。
+        </div>
+      </Card>
+
+      <Card>
+        <Label>権限管理</Label>
+
+        {memberProfiles.length === 0 ? (
+          <p style={centerSmallMutedStyle}>メンバー情報を読み込み中...</p>
+        ) : (
+          memberProfiles.map((m) => {
+            const isOwner = m.uid === leagueOwnerUid;
+            const isAdmin = isOwner || leagueAdminUids.includes(m.uid);
+            const isMe = m.uid === user.uid;
+
+            return (
+              <div
+                key={m.uid}
+                style={{
+                  padding: "10px 0",
+                  borderBottom: `1px solid ${C.border}`,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 10,
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700 }}>
+                    {m.displayName}
+                    {isMe ? "（自分）" : ""}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: isAdmin ? C.gold : C.muted,
+                      marginTop: 3,
+                    }}
+                  >
+                    {isOwner ? "作成者・管理者" : isAdmin ? "管理者" : "一般ユーザー"}
+                  </div>
+                </div>
+
+                {isOwner ? (
+                  <div style={{ fontSize: 11, color: C.muted }}>
+                    解除不可
+                  </div>
+                ) : isAdmin ? (
+                  <button
+                    onClick={() => setAdminStatus(m.uid, false)}
+                    style={smallDangerButtonStyle}
+                  >
+                    一般に戻す
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setAdminStatus(m.uid, true)}
+                    style={smallGoldButtonStyle}
+                  >
+                    管理者にする
+                  </button>
+                )}
+              </div>
+            );
+          })
         )}
       </Card>
 
@@ -1065,14 +1302,7 @@ function SettingsTab({
           />
           <button
             onClick={addPlayer}
-            style={{
-              padding: "0 14px",
-              borderRadius: 8,
-              border: `1px solid ${C.gold}`,
-              background: C.surface,
-              color: C.gold,
-              cursor: "pointer",
-            }}
+            style={smallGoldButtonStyle}
           >
             追加
           </button>
@@ -1283,6 +1513,20 @@ const centerMutedStyle = {
   lineHeight: 1.7,
 };
 
+const centerSmallMutedStyle = {
+  color: C.muted,
+  fontSize: 12,
+  textAlign: "center",
+  lineHeight: 1.7,
+};
+
+const errorTextStyle = {
+  color: C.red,
+  textAlign: "center",
+  padding: 12,
+  lineHeight: 1.7,
+};
+
 const titleStyle = {
   fontSize: 22,
   fontWeight: 700,
@@ -1327,4 +1571,24 @@ const googleBtnStyle = {
   color: C.gold,
   cursor: "pointer",
   fontWeight: 700,
+};
+
+const smallGoldButtonStyle = {
+  padding: "8px 12px",
+  borderRadius: 8,
+  border: `1px solid ${C.gold}`,
+  background: C.surface,
+  color: C.gold,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const smallDangerButtonStyle = {
+  padding: "8px 12px",
+  borderRadius: 8,
+  border: `1px solid ${C.red}`,
+  background: "transparent",
+  color: C.red,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
 };
