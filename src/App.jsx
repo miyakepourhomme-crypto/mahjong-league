@@ -60,6 +60,13 @@ function getProfileLeagueIds(profile) {
   return Array.from(new Set(ids));
 }
 
+function getPageViewFromUrl() {
+  if (typeof window === "undefined") return "home";
+
+  const params = new URLSearchParams(window.location.search);
+  return params.get("view") === "app" ? "app" : "home";
+}
+
 function calcPoints(entries, cfg) {
   const sorted = [...entries].sort((a, b) => b.score - a.score);
 
@@ -103,6 +110,39 @@ export default function App() {
   const [leagueError, setLeagueError] = useState("");
   const [leagueSummaries, setLeagueSummaries] = useState([]);
   const [leagueSummariesLoading, setLeagueSummariesLoading] = useState(false);
+  const [pageView, setPageView] = useState(() => getPageViewFromUrl());
+
+  const isAppView = pageView === "app";
+
+  function setRouteView(nextView, options = {}) {
+    const url = new URL(window.location.href);
+
+    if (nextView === "app") {
+      url.searchParams.set("view", "app");
+    } else {
+      url.searchParams.delete("view");
+    }
+
+    setPageView(nextView);
+
+    if (url.toString() === window.location.href) return;
+
+    const state = { pageView: nextView };
+
+    if (options.replace) {
+      window.history.replaceState(state, "", url);
+    } else {
+      window.history.pushState(state, "", url);
+    }
+  }
+
+  function openAppView() {
+    setRouteView("app");
+  }
+
+  function showHomeView(options = {}) {
+    setRouteView("home", options);
+  }
 
   const canMember =
     !!user && !!activeLeagueId && leagueMemberUids.includes(user.uid);
@@ -124,6 +164,30 @@ export default function App() {
       navigator.serviceWorker.register("/sw.js").catch(console.error);
     }
   }, []);
+
+  useEffect(() => {
+    window.history.replaceState(
+      { pageView: getPageViewFromUrl() },
+      "",
+      window.location.href
+    );
+
+    function handlePopState() {
+      setPageView(getPageViewFromUrl());
+    }
+
+    window.addEventListener("popstate", handlePopState);
+
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (authReady && !user && pageView === "app") {
+      showHomeView({ replace: true });
+    }
+  }, [authReady, user, pageView]);
 
   useEffect(() => {
     if (!canAdmin && tab === "settings") {
@@ -484,6 +548,7 @@ export default function App() {
   async function signInAsGuest() {
     try {
       await signInAnonymously(auth);
+      openAppView();
     } catch (e) {
       console.error(e);
       alert("ゲストログインに失敗しました。Firebase Authenticationで匿名ログインが有効か確認してください。");
@@ -1091,11 +1156,21 @@ export default function App() {
       <BaseStyle />
 
       <div style={appBgStyle}>
-        <div className={activeLeagueId ? "app-page app-page-wide" : "app-page"}>
+        <div className={activeLeagueId && isAppView ? "app-page app-page-wide" : "app-page"}>
           <Header />
 
-          {!user ? (
-            <LoginScreen signInAsGuest={signInAsGuest} />
+          {!isAppView ? (
+            <LoginScreen
+              signInAsGuest={signInAsGuest}
+              user={user}
+              openAppView={openAppView}
+            />
+          ) : !user ? (
+            <LoginScreen
+              signInAsGuest={signInAsGuest}
+              user={user}
+              openAppView={openAppView}
+            />
           ) : profileLoading ? (
             <Card>
               <p style={centerMutedStyle}>プロフィール確認中...</p>
@@ -1388,13 +1463,14 @@ function Header() {
   );
 }
 
-function LoginScreen({ signInAsGuest }) {
+function LoginScreen({ signInAsGuest, user, openAppView }) {
   async function signInWithGoogle() {
     try {
       provider.setCustomParameters({
         prompt: "select_account",
       });
       await signInWithPopup(auth, provider);
+      openAppView();
     } catch (e) {
       console.error(e);
       alert("Googleログインに失敗しました。ChromeまたはSafariで開いて再度お試しください。");
@@ -1465,29 +1541,52 @@ function LoginScreen({ signInAsGuest }) {
             <MiniStat label="開始" value="ゲスト可" />
           </div>
 
-          <button onClick={signInWithGoogle} style={googleBtnStyle}>
-            Googleでログイン
-          </button>
+          {user ? (
+            <>
+              <button onClick={openAppView} style={googleBtnStyle}>
+                アプリを開く
+              </button>
 
-          <button
-            onClick={signInAsGuest}
-            style={{ ...loginBtnStyle, marginTop: 10 }}
-          >
-            ゲストではじめる
-          </button>
+              <div
+                style={{
+                  marginTop: 12,
+                  fontSize: 11,
+                  color: C.muted,
+                  lineHeight: 1.7,
+                }}
+              >
+                ログイン済みです。ブラウザの進む/戻るで、
+                <br />
+                この紹介ページとアプリ画面を切り替えられます。
+              </div>
+            </>
+          ) : (
+            <>
+              <button onClick={signInWithGoogle} style={googleBtnStyle}>
+                Googleでログイン
+              </button>
 
-          <div
-            style={{
-              marginTop: 12,
-              fontSize: 11,
-              color: C.muted,
-              lineHeight: 1.7,
-            }}
-          >
-            GoogleログインはChromeまたはSafariで開いてください。
-            <br />
-            LINE・Instagram等のアプリ内ブラウザではログインできない場合があります。
-          </div>
+              <button
+                onClick={signInAsGuest}
+                style={{ ...loginBtnStyle, marginTop: 10 }}
+              >
+                ゲストではじめる
+              </button>
+
+              <div
+                style={{
+                  marginTop: 12,
+                  fontSize: 11,
+                  color: C.muted,
+                  lineHeight: 1.7,
+                }}
+              >
+                GoogleログインはChromeまたはSafariで開いてください。
+                <br />
+                LINE・Instagram等のアプリ内ブラウザではログインできない場合があります。
+              </div>
+            </>
+          )}
         </section>
       </Card>
 
