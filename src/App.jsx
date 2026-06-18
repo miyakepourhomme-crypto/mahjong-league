@@ -1208,6 +1208,7 @@ export default function App() {
                 activeLeagueId={activeLeagueId}
                 switchLeague={switchLeague}
                 createLeague={createLeague}
+                joinLeague={joinLeague}
               />
             </>
           ) : (
@@ -1241,6 +1242,7 @@ export default function App() {
                   activeLeagueId={activeLeagueId}
                   switchLeague={switchLeague}
                   createLeague={createLeague}
+                  joinLeague={joinLeague}
                 />
 
                 <TabNav
@@ -1915,9 +1917,55 @@ function LeagueSwitcher({
   activeLeagueId,
   switchLeague,
   createLeague,
+  joinLeague,
 }) {
   const [newLeagueName, setNewLeagueName] = useState("");
+  const [joinInput, setJoinInput] = useState("");
   const [creating, setCreating] = useState(false);
+  const [joining, setJoining] = useState(false);
+
+  function extractLeagueId(value) {
+    const raw = value.trim();
+
+    if (!raw) return "";
+
+    try {
+      const url = new URL(raw);
+      const leagueId = url.searchParams.get("league");
+      if (leagueId) return leagueId.trim();
+    } catch {
+      // URLではない場合は、下の簡易解析へ進める
+    }
+
+    const matched = raw.match(/[?&]league=([^&]+)/);
+    if (matched?.[1]) {
+      return decodeURIComponent(matched[1]).trim();
+    }
+
+    return raw;
+  }
+
+  async function handleJoinLeague() {
+    const leagueId = extractLeagueId(joinInput);
+
+    if (!leagueId) {
+      alert("招待URLまたはリーグIDを入力してください。");
+      return;
+    }
+
+    if (leagueId === activeLeagueId) {
+      alert("現在表示中のリーグです。");
+      return;
+    }
+
+    try {
+      setJoining(true);
+      await joinLeague(leagueId);
+      setJoinInput("");
+    } finally {
+      setJoining(false);
+    }
+  }
 
   async function handleCreateLeague() {
     const cleanName = newLeagueName.trim();
@@ -1938,7 +1986,7 @@ function LeagueSwitcher({
 
   return (
     <Card>
-      <Label>リーグ切替</Label>
+      <Label>リーグ切替・参加</Label>
 
       {leagueSummariesLoading ? (
         <p style={centerSmallMutedStyle}>参加リーグを読み込み中...</p>
@@ -1978,6 +2026,36 @@ function LeagueSwitcher({
           })}
         </div>
       )}
+
+      <div
+        style={{
+          borderTop: `1px solid ${C.border}`,
+          marginTop: 12,
+          paddingTop: 12,
+        }}
+      >
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>
+          既存リーグに参加
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            value={joinInput}
+            onChange={(e) => setJoinInput(e.target.value)}
+            placeholder="招待URL または リーグID"
+            style={inputStyle}
+          />
+          <button
+            onClick={handleJoinLeague}
+            disabled={joining}
+            style={smallGoldButtonStyle}
+          >
+            {joining ? "参加中" : "参加"}
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 6, lineHeight: 1.6 }}>
+          管理者から共有された招待URL、またはリーグIDを入力してください。
+        </div>
+      </div>
 
       <div
         style={{
