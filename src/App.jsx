@@ -1795,7 +1795,7 @@ function LeagueSwitcher({
           <input
             value={newLeagueName}
             onChange={(e) => setNewLeagueName(e.target.value)}
-            placeholder="例：週末麻雀会"
+            placeholder="例：麻雀会"
             style={inputStyle}
           />
           <button
