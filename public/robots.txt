@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://mahjong-league-flame.vercel.app/sitemap.xml

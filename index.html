@@ -2,25 +2,66 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <title>麻雀リーグ</title>
-    <meta name="description" content="麻雀リーグの点数・成績管理アプリ" />
+    <title>麻雀リーグ管理アプリ｜点数記録・成績集計・ランキング管理</title>
+    <meta
+      name="description"
+      content="麻雀リーグの点数記録・成績集計・ランキング管理ができるWebアプリ。招待URL、リアルタイム同期、複数リーグ、個人成績、トップ率、四着率の自動集計に対応。"
+    />
+    <meta
+      name="keywords"
+      content="麻雀,麻雀リーグ,麻雀成績管理,麻雀点数記録,麻雀スコア管理,麻雀ランキング,麻雀アプリ"
+    />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://mahjong-league-flame.vercel.app/" />
 
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="麻雀リーグ" />
+    <meta property="og:title" content="麻雀リーグ管理アプリ｜点数記録・成績集計・ランキング管理" />
+    <meta
+      property="og:description"
+      content="仲間内の麻雀成績をクラウドで管理。リーグ作成、招待URL、点数記録、総合ランキング、個人成績の自動集計に対応。"
+    />
+    <meta property="og:url" content="https://mahjong-league-flame.vercel.app/" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="麻雀リーグ管理アプリ" />
+    <meta
+      name="twitter:description"
+      content="麻雀の点数記録・成績集計・ランキング管理ができるWebアプリ。"
+    />
 
     <meta name="theme-color" content="#0e0e1a" />
-
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="麻雀リーグ" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 
+    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" />
     <link rel="apple-touch-icon" href="/icon.svg" />
-  </head>
 
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "麻雀リーグ",
+        "alternateName": "Mahjong League Tracker",
+        "url": "https://mahjong-league-flame.vercel.app/",
+        "applicationCategory": "UtilityApplication",
+        "operatingSystem": "Web",
+        "description": "麻雀リーグの点数記録・成績集計・ランキング管理ができるWebアプリ。招待URL、リアルタイム同期、複数リーグ、個人成績、トップ率、四着率の自動集計に対応。",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "JPY"
+        }
+      }
+    </script>
+  </head>
   <body>
+    <noscript>
+      麻雀リーグは、麻雀の点数記録・成績集計・ランキング管理ができるWebアプリです。利用するにはJavaScriptを有効にしてください。
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

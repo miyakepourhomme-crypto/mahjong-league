@@ -1397,45 +1397,144 @@ function LoginScreen({ signInAsGuest }) {
       await signInWithPopup(auth, provider);
     } catch (e) {
       console.error(e);
-      alert("Googleログインに失敗しました。");
+      alert("Googleログインに失敗しました。ChromeまたはSafariで開いて再度お試しください。");
     }
   }
 
+  const features = [
+    ["リーグ共有", "招待URLでメンバーを追加し、仲間内の麻雀成績を共有管理できます。"],
+    ["点数記録", "半荘ごとの素点を入力するだけで、順位点・オカ・ウマ込みのポイントを自動計算します。"],
+    ["成績集計", "総合ランキング、平均順位、トップ率、四着率、個人成績を自動で集計します。"],
+    ["スマホ・PC対応", "対局中はスマホで素早く入力、あとからPCで履歴や成績を確認できます。"],
+  ];
+
   return (
-    <Card>
-      <div style={{ textAlign: "center", padding: "18px 0" }}>
-        <div style={titleStyle}>ログイン</div>
-        <div style={descStyle}>
-          Googleログイン、またはゲストとしてすぐに始められます。
-          <br />
-          ゲスト利用後にGoogleへ連携すると、同じデータを引き継げます。
+    <>
+      <Card>
+        <section style={{ textAlign: "center", padding: "18px 0 8px" }}>
+          <div
+            style={{
+              display: "inline-block",
+              color: C.gold,
+              border: `1px solid ${C.gold}`,
+              borderRadius: 999,
+              padding: "4px 10px",
+              fontSize: 11,
+              fontWeight: 700,
+              marginBottom: 12,
+            }}
+          >
+            麻雀の点数記録・成績集計・リーグ管理
+          </div>
+
+          <h1
+            style={{
+              color: C.gold,
+              fontSize: 28,
+              lineHeight: 1.35,
+              marginBottom: 12,
+            }}
+          >
+            麻雀リーグ管理アプリ
+          </h1>
+
+          <p
+            style={{
+              color: C.text,
+              fontSize: 14,
+              lineHeight: 1.8,
+              marginBottom: 14,
+            }}
+          >
+            仲間内の麻雀成績をクラウドで管理。
+            <br />
+            対局結果、総合ランキング、個人成績、トップ率、四着率を自動集計できます。
+          </p>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 8,
+              marginBottom: 16,
+            }}
+          >
+            <MiniStat label="対応" value="スマホ・PC" />
+            <MiniStat label="共有" value="招待URL" />
+            <MiniStat label="集計" value="自動計算" />
+            <MiniStat label="開始" value="ゲスト可" />
+          </div>
+
+          <button onClick={signInWithGoogle} style={googleBtnStyle}>
+            Googleでログイン
+          </button>
+
+          <button
+            onClick={signInAsGuest}
+            style={{ ...loginBtnStyle, marginTop: 10 }}
+          >
+            ゲストではじめる
+          </button>
+
+          <div
+            style={{
+              marginTop: 12,
+              fontSize: 11,
+              color: C.muted,
+              lineHeight: 1.7,
+            }}
+          >
+            GoogleログインはChromeまたはSafariで開いてください。
+            <br />
+            LINE・Instagram等のアプリ内ブラウザではログインできない場合があります。
+          </div>
+        </section>
+      </Card>
+
+      <Card>
+        <h2 style={sectionHeadingStyle}>できること</h2>
+        <div style={{ display: "grid", gap: 10 }}>
+          {features.map(([title, body]) => (
+            <div
+              key={title}
+              style={{
+                background: C.panel,
+                border: `1px solid ${C.border}`,
+                borderRadius: 10,
+                padding: 12,
+              }}
+            >
+              <div style={{ color: C.gold, fontWeight: 700, marginBottom: 5 }}>
+                {title}
+              </div>
+              <p style={{ color: C.muted, fontSize: 12, lineHeight: 1.7 }}>
+                {body}
+              </p>
+            </div>
+          ))}
         </div>
+      </Card>
 
-        <button onClick={signInWithGoogle} style={googleBtnStyle}>
-          Googleでログイン
-        </button>
+      <Card>
+        <h2 style={sectionHeadingStyle}>主な機能</h2>
+        <ul style={seoListStyle}>
+          <li>リーグ作成・複数リーグ切替</li>
+          <li>招待URLによるメンバー参加</li>
+          <li>ゲスト利用・Googleログイン・Google連携</li>
+          <li>半荘ごとの点数記録とポイント自動計算</li>
+          <li>総合ランキング・個人成績・順位率の自動集計</li>
+          <li>履歴編集、入力者記録、管理者権限、ユーザー管理</li>
+        </ul>
+      </Card>
 
-        <button
-          onClick={signInAsGuest}
-          style={{ ...loginBtnStyle, marginTop: 10 }}
-        >
-          ゲストではじめる
-        </button>
-
-        <div
-          style={{
-            marginTop: 12,
-            fontSize: 11,
-            color: C.muted,
-            lineHeight: 1.7,
-          }}
-        >
-          ゲスト利用は同じ端末・同じブラウザでは継続できます。
-          <br />
-          ブラウザデータ削除や端末変更をすると、引き継げない場合があります。
-        </div>
-      </div>
-    </Card>
+      <Card>
+        <h2 style={sectionHeadingStyle}>こんな人向け</h2>
+        <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.8 }}>
+          友人同士の麻雀会、社内麻雀リーグ、月間ランキング、継続的な成績管理に使えます。
+          紙やスプレッドシートで管理していた点数・順位・成績を、スマホからすぐに記録できます。
+        </p>
+      </Card>
+    </>
   );
 }
 
@@ -1795,7 +1894,7 @@ function LeagueSwitcher({
           <input
             value={newLeagueName}
             onChange={(e) => setNewLeagueName(e.target.value)}
-            placeholder="例：麻雀会"
+            placeholder="例：週末麻雀会"
             style={inputStyle}
           />
           <button
@@ -2880,6 +2979,21 @@ function MiniStat({ label, value, strong }) {
     </div>
   );
 }
+
+
+const sectionHeadingStyle = {
+  color: C.gold,
+  fontSize: 16,
+  fontWeight: 700,
+  marginBottom: 12,
+};
+
+const seoListStyle = {
+  color: C.muted,
+  fontSize: 13,
+  lineHeight: 1.9,
+  paddingLeft: 18,
+};
 
 const appBgStyle = {
   minHeight: "100vh",
