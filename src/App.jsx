@@ -2583,6 +2583,11 @@ function PlayerDetailTab({ playerId, players, games, goBack }) {
       .sort((a, b) => b.createdAt - a.createdAt);
   }, [games, playerId, players]);
 
+  const chronologicalEntries = useMemo(
+    () => [...entries].sort((a, b) => a.createdAt - b.createdAt),
+    [entries]
+  );
+
   if (!player) {
     return (
       <Card>
@@ -2665,6 +2670,21 @@ function PlayerDetailTab({ playerId, players, games, goBack }) {
       </Card>
 
       <Card>
+        <Label>対戦記録グラフ</Label>
+        <RankTrendChart entries={chronologicalEntries} />
+      </Card>
+
+      <Card>
+        <Label>順位グラフ</Label>
+        <RankRateBarChart rankCounts={rankCounts} total={n} />
+      </Card>
+
+      <Card>
+        <Label>ポイント推移グラフ</Label>
+        <CumulativePointChart entries={chronologicalEntries} />
+      </Card>
+
+      <Card>
         <Label>順位率</Label>
         <div style={detailGridStyle}>
           <MiniStat label="トップ率" value={`${rate(rankCounts[0])}%`} />
@@ -2740,6 +2760,302 @@ function PlayerDetailTab({ playerId, players, games, goBack }) {
         )}
       </Card>
     </>
+  );
+}
+
+function ChartEmpty({ children }) {
+  return (
+    <div
+      style={{
+        color: C.muted,
+        fontSize: 12,
+        textAlign: "center",
+        padding: "26px 0",
+        lineHeight: 1.7,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function RankTrendChart({ entries }) {
+  const recent = entries.slice(-50);
+
+  if (recent.length === 0) {
+    return <ChartEmpty>まだグラフ化できる対局履歴がありません。</ChartEmpty>;
+  }
+
+  const width = 320;
+  const height = 184;
+  const left = 34;
+  const right = 12;
+  const top = 18;
+  const bottom = 28;
+  const chartW = width - left - right;
+  const chartH = height - top - bottom;
+
+  const x = (i) =>
+    recent.length === 1 ? left + chartW / 2 : left + (chartW * i) / (recent.length - 1);
+  const y = (rank) => top + (chartH * rank) / 3;
+  const points = recent.map((e, i) => `${x(i)},${y(e.rank)}`).join(" ");
+
+  const last = recent[recent.length - 1];
+  const firstCount = recent.filter((e) => e.rank === 0).length;
+  const lastCount = recent.filter((e) => e.rank === 3).length;
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${width} ${height}`} style={chartSvgStyle}>
+        {[0, 1, 2, 3].map((rank) => (
+          <g key={rank}>
+            <line
+              x1={left}
+              y1={y(rank)}
+              x2={width - right}
+              y2={y(rank)}
+              stroke={C.border}
+              strokeWidth="1"
+            />
+            <text
+              x="6"
+              y={y(rank) + 4}
+              fill={C.muted}
+              fontSize="11"
+            >
+              {rank + 1}位
+            </text>
+          </g>
+        ))}
+
+        <polyline
+          points={points}
+          fill="none"
+          stroke={C.accent}
+          strokeWidth="3"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+
+        {recent.map((e, i) => (
+          <circle
+            key={`${e.gameId}-${i}`}
+            cx={x(i)}
+            cy={y(e.rank)}
+            r={e.rank === 0 ? 4.2 : 3.2}
+            fill={e.rank === 0 ? C.gold : C.accent}
+            stroke={C.surface}
+            strokeWidth="1.5"
+          />
+        ))}
+
+        <text
+          x={left}
+          y={height - 6}
+          fill={C.muted}
+          fontSize="10"
+        >
+          古い
+        </text>
+        <text
+          x={width - right}
+          y={height - 6}
+          fill={C.muted}
+          fontSize="10"
+          textAnchor="end"
+        >
+          新しい
+        </text>
+      </svg>
+
+      <div style={chartCaptionStyle}>
+        直近{recent.length}戦 / 最新順位 {last.rank + 1}位 / トップ {firstCount}回 / ラス {lastCount}回
+      </div>
+    </div>
+  );
+}
+
+function RankRateBarChart({ rankCounts, total }) {
+  const rows = [
+    { label: "1位", count: rankCounts[0], color: C.gold },
+    { label: "2位", count: rankCounts[1], color: "#60a5fa" },
+    { label: "3位", count: rankCounts[2], color: "#fb923c" },
+    { label: "4位", count: rankCounts[3], color: C.red },
+  ];
+
+  if (!total) {
+    return <ChartEmpty>まだ順位率を表示できる対局履歴がありません。</ChartEmpty>;
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      {rows.map((row) => {
+        const pct = Math.round((row.count / total) * 100);
+        return (
+          <div key={row.label}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                fontSize: 12,
+                color: C.muted,
+                marginBottom: 5,
+              }}
+            >
+              <span>{row.label}</span>
+              <span>
+                {pct}% / {row.count}回
+              </span>
+            </div>
+            <div
+              style={{
+                height: 12,
+                background: "#0a0a16",
+                border: `1px solid ${C.border}`,
+                borderRadius: 999,
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width: `${pct}%`,
+                  minWidth: row.count ? 8 : 0,
+                  height: "100%",
+                  background: row.color,
+                  borderRadius: 999,
+                }}
+              />
+            </div>
+          </div>
+        );
+      })}
+      <div style={chartCaptionStyle}>全{total}戦の順位分布です。</div>
+    </div>
+  );
+}
+
+function CumulativePointChart({ entries }) {
+  if (entries.length === 0) {
+    return <ChartEmpty>まだポイント推移を表示できる対局履歴がありません。</ChartEmpty>;
+  }
+
+  const series = entries.reduce((list, e) => {
+    const prev = list.length ? list[list.length - 1].value : 0;
+    list.push({
+      value: Math.round((prev + Number(e.pt || 0)) * 10) / 10,
+      gameId: e.gameId,
+    });
+    return list;
+  }, []);
+
+  const width = 320;
+  const height = 188;
+  const left = 42;
+  const right = 14;
+  const top = 18;
+  const bottom = 30;
+  const chartW = width - left - right;
+  const chartH = height - top - bottom;
+
+  const values = series.map((p) => p.value);
+  let min = Math.min(0, ...values);
+  let max = Math.max(0, ...values);
+
+  if (min === max) {
+    min -= 10;
+    max += 10;
+  }
+
+  const pad = Math.max(5, (max - min) * 0.12);
+  min -= pad;
+  max += pad;
+
+  const x = (i) =>
+    series.length === 1 ? left + chartW / 2 : left + (chartW * i) / (series.length - 1);
+  const y = (value) => top + chartH - ((value - min) / (max - min)) * chartH;
+
+  const points = series.map((p, i) => `${x(i)},${y(p.value)}`).join(" ");
+  const zeroY = y(0);
+  const current = series[series.length - 1].value;
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${width} ${height}`} style={chartSvgStyle}>
+        <line
+          x1={left}
+          y1={zeroY}
+          x2={width - right}
+          y2={zeroY}
+          stroke={C.border}
+          strokeWidth="1"
+          strokeDasharray="4 4"
+        />
+        <text x="8" y={zeroY + 4} fill={C.muted} fontSize="10">
+          0
+        </text>
+
+        {[min, max].map((value, i) => (
+          <g key={i}>
+            <line
+              x1={left}
+              y1={y(value)}
+              x2={width - right}
+              y2={y(value)}
+              stroke={C.border}
+              strokeWidth="1"
+              opacity="0.55"
+            />
+            <text x="8" y={y(value) + 4} fill={C.muted} fontSize="10">
+              {fmtPt(Math.round(value * 10) / 10)}
+            </text>
+          </g>
+        ))}
+
+        <polyline
+          points={points}
+          fill="none"
+          stroke={current >= 0 ? C.green : C.red}
+          strokeWidth="3"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+
+        {series.map((p, i) => (
+          <circle
+            key={`${p.gameId}-${i}`}
+            cx={x(i)}
+            cy={y(p.value)}
+            r={i === series.length - 1 ? 4 : 2.6}
+            fill={i === series.length - 1 ? C.gold : current >= 0 ? C.green : C.red}
+            stroke={C.surface}
+            strokeWidth="1.4"
+          />
+        ))}
+
+        <text
+          x={left}
+          y={height - 6}
+          fill={C.muted}
+          fontSize="10"
+        >
+          1戦目
+        </text>
+        <text
+          x={width - right}
+          y={height - 6}
+          fill={C.muted}
+          fontSize="10"
+          textAnchor="end"
+        >
+          {series.length}戦目
+        </text>
+      </svg>
+
+      <div style={chartCaptionStyle}>
+        現在の累計ポイント {fmtPt(Math.round(current * 10) / 10)}
+      </div>
+    </div>
   );
 }
 
@@ -3157,6 +3473,22 @@ function MiniStat({ label, value, strong }) {
   );
 }
 
+
+const chartSvgStyle = {
+  width: "100%",
+  display: "block",
+  background: "#101020",
+  border: `1px solid ${C.border}`,
+  borderRadius: 10,
+};
+
+const chartCaptionStyle = {
+  marginTop: 8,
+  color: C.muted,
+  fontSize: 11,
+  textAlign: "center",
+  lineHeight: 1.6,
+};
 
 const sectionHeadingStyle = {
   color: C.gold,
