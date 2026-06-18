@@ -51,6 +51,15 @@ function sortGames(list) {
   });
 }
 
+function getProfileLeagueIds(profile) {
+  const ids = [
+    ...(Array.isArray(profile?.leagueIds) ? profile.leagueIds : []),
+    profile?.activeLeagueId,
+  ].filter(Boolean);
+
+  return Array.from(new Set(ids));
+}
+
 function calcPoints(entries, cfg) {
   const sorted = [...entries].sort((a, b) => b.score - a.score);
 
@@ -92,6 +101,8 @@ export default function App() {
   const [memberProfiles, setMemberProfiles] = useState([]);
   const [leagueReady, setLeagueReady] = useState(false);
   const [leagueError, setLeagueError] = useState("");
+  const [leagueSummaries, setLeagueSummaries] = useState([]);
+  const [leagueSummariesLoading, setLeagueSummariesLoading] = useState(false);
 
   const canMember =
     !!user && !!activeLeagueId && leagueMemberUids.includes(user.uid);
@@ -137,6 +148,8 @@ export default function App() {
       setMemberProfiles([]);
       setLeagueReady(false);
       setLeagueError("");
+      setLeagueSummaries([]);
+      setLeagueSummariesLoading(false);
 
       setPlayers([]);
       setGames([]);
@@ -175,6 +188,71 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
+    if (!user || !profile) {
+      setLeagueSummaries([]);
+      setLeagueSummariesLoading(false);
+      return;
+    }
+
+    const leagueIds = getProfileLeagueIds(profile);
+
+    if (leagueIds.length === 0) {
+      setLeagueSummaries([]);
+      setLeagueSummariesLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadLeagueSummaries() {
+      setLeagueSummariesLoading(true);
+
+      try {
+        const list = await Promise.all(
+          leagueIds.map(async (leagueId) => {
+            const snap = await getDoc(doc(db, "leagues", leagueId));
+
+            if (!snap.exists()) return null;
+
+            const data = snap.data();
+
+            if (!data.memberUids?.includes(user.uid)) return null;
+
+            return {
+              id: leagueId,
+              name: data.name || "名称未設定のリーグ",
+              memberCount: data.memberUids?.length || 0,
+              isOwner: data.ownerUid === user.uid,
+              isAdmin:
+                data.ownerUid === user.uid ||
+                (Array.isArray(data.adminUids) && data.adminUids.includes(user.uid)),
+            };
+          })
+        );
+
+        if (!cancelled) {
+          setLeagueSummaries(list.filter(Boolean));
+        }
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) {
+          setLeagueSummaries([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLeagueSummariesLoading(false);
+        }
+      }
+    }
+
+    loadLeagueSummaries();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, profile, activeLeagueId, leagueName, leagueMemberUids.length]);
+
+  useEffect(() => {
     if (!user || !profile) return;
 
     async function prepareLeague() {
@@ -184,6 +262,7 @@ export default function App() {
       try {
         const params = new URLSearchParams(window.location.search);
         const inviteLeagueId = params.get("league");
+        const profileLeagueIds = getProfileLeagueIds(profile);
 
         if (inviteLeagueId) {
           if (profile.activeLeagueId !== inviteLeagueId) {
@@ -197,6 +276,11 @@ export default function App() {
 
         if (profile.activeLeagueId) {
           await loadLeagueById(profile.activeLeagueId);
+          return;
+        }
+
+        if (profileLeagueIds.length === 1) {
+          await switchLeague(profileLeagueIds[0]);
           return;
         }
 
@@ -333,6 +417,7 @@ export default function App() {
       email: user.email || "",
       uid: user.uid,
       activeLeagueId: "",
+      leagueIds: [],
       authProvider: user.isAnonymous ? "anonymous" : "google",
       linkedToGoogle: !user.isAnonymous,
       createdAt: Date.now(),
@@ -457,18 +542,34 @@ export default function App() {
     }
   }
 
-  async function clearActiveLeague() {
+  async function clearActiveLeague(removeLeagueId = "") {
     if (!user || !profile) return;
+
+    const now = Date.now();
+    const nextLeagueIds = removeLeagueId
+      ? getProfileLeagueIds(profile).filter((id) => id !== removeLeagueId)
+      : getProfileLeagueIds(profile);
 
     const updatedProfile = {
       ...profile,
       activeLeagueId: "",
-      updatedAt: Date.now(),
+      leagueIds: nextLeagueIds,
+      updatedAt: now,
     };
 
     try {
-      await setDoc(doc(db, "users", user.uid), updatedProfile, { merge: true });
+      await setDoc(
+        doc(db, "users", user.uid),
+        {
+          activeLeagueId: "",
+          leagueIds: nextLeagueIds,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+
       setProfile(updatedProfile);
+      setActiveLeagueId("");
     } catch (e) {
       console.error(e);
     }
@@ -494,7 +595,7 @@ export default function App() {
         setPlayers([]);
         setGames([]);
         setCfg(defaultCfg);
-        await clearActiveLeague();
+        await clearActiveLeague(leagueId);
         setLeagueReady(true);
         return;
       }
@@ -511,7 +612,7 @@ export default function App() {
         setPlayers([]);
         setGames([]);
         setCfg(defaultCfg);
-        await clearActiveLeague();
+        await clearActiveLeague(leagueId);
         setLeagueReady(true);
         return;
       }
@@ -559,6 +660,48 @@ export default function App() {
     }
   }
 
+  async function switchLeague(leagueId) {
+    if (!user || !profile || !leagueId) return;
+
+    if (leagueId === activeLeagueId) return;
+
+    const now = Date.now();
+    const nextLeagueIds = Array.from(
+      new Set([...getProfileLeagueIds(profile), leagueId])
+    );
+
+    const updatedProfile = {
+      ...profile,
+      activeLeagueId: leagueId,
+      leagueIds: nextLeagueIds,
+      updatedAt: now,
+    };
+
+    try {
+      setLeagueReady(false);
+      setLeagueError("");
+
+      await setDoc(
+        doc(db, "users", user.uid),
+        {
+          activeLeagueId: leagueId,
+          leagueIds: nextLeagueIds,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+
+      setProfile(updatedProfile);
+      setSelectedPlayerId("");
+      setTab("record");
+      await loadLeagueById(leagueId);
+    } catch (e) {
+      console.error(e);
+      setLeagueError("リーグ切替に失敗しました。");
+      setLeagueReady(true);
+    }
+  }
+
   async function createLeague(name) {
     if (!user || !profile) return;
 
@@ -573,6 +716,10 @@ export default function App() {
 
     try {
       const leagueId = uid();
+      const now = Date.now();
+      const nextLeagueIds = Array.from(
+        new Set([...getProfileLeagueIds(profile), leagueId])
+      );
 
       const newLeague = {
         name: cleanName,
@@ -583,8 +730,8 @@ export default function App() {
         players: [],
         games: [],
         cfg: defaultCfg,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        createdAt: now,
+        updatedAt: now,
       };
 
       await setDoc(doc(db, "leagues", leagueId), newLeague);
@@ -592,10 +739,19 @@ export default function App() {
       const updatedProfile = {
         ...profile,
         activeLeagueId: leagueId,
-        updatedAt: Date.now(),
+        leagueIds: nextLeagueIds,
+        updatedAt: now,
       };
 
-      await setDoc(doc(db, "users", user.uid), updatedProfile, { merge: true });
+      await setDoc(
+        doc(db, "users", user.uid),
+        {
+          activeLeagueId: leagueId,
+          leagueIds: nextLeagueIds,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
 
       setProfile(updatedProfile);
       setActiveLeagueId(leagueId);
@@ -606,6 +762,7 @@ export default function App() {
       setPlayers([]);
       setGames([]);
       setCfg(defaultCfg);
+      setTab("record");
       setLeagueReady(true);
     } catch (e) {
       console.error(e);
@@ -645,13 +802,28 @@ export default function App() {
         });
       }
 
+      const now = Date.now();
+      const nextLeagueIds = Array.from(
+        new Set([...getProfileLeagueIds(profile), leagueId])
+      );
+
       const updatedProfile = {
         ...profile,
         activeLeagueId: leagueId,
-        updatedAt: Date.now(),
+        leagueIds: nextLeagueIds,
+        updatedAt: now,
       };
 
-      await setDoc(doc(db, "users", user.uid), updatedProfile, { merge: true });
+      await setDoc(
+        doc(db, "users", user.uid),
+        {
+          activeLeagueId: leagueId,
+          leagueIds: nextLeagueIds,
+          updatedAt: now,
+        },
+        { merge: true }
+      );
+
       setProfile(updatedProfile);
 
       await loadLeagueById(leagueId);
@@ -942,12 +1114,12 @@ export default function App() {
           ) : !activeLeagueId ? (
             <>
               <UserCard
-                  profile={profile}
-                  user={user}
-                  canAdmin={canAdmin}
-                  updateDisplayName={updateOwnDisplayName}
-                  linkGuestWithGoogle={linkGuestWithGoogle}
-                />
+                profile={profile}
+                user={user}
+                canAdmin={canAdmin}
+                updateDisplayName={updateOwnDisplayName}
+                linkGuestWithGoogle={linkGuestWithGoogle}
+              />
 
               {leagueError && (
                 <Card>
@@ -955,7 +1127,13 @@ export default function App() {
                 </Card>
               )}
 
-              <LeagueSetup createLeague={createLeague} />
+              <LeagueSwitcher
+                leagueSummaries={leagueSummaries}
+                leagueSummariesLoading={leagueSummariesLoading}
+                activeLeagueId={activeLeagueId}
+                switchLeague={switchLeague}
+                createLeague={createLeague}
+              />
             </>
           ) : (
             <div className="desktop-shell">
@@ -980,6 +1158,14 @@ export default function App() {
                   memberCount={leagueMemberUids.length}
                   inviteUrl={inviteUrl}
                   canAdmin={canAdmin}
+                />
+
+                <LeagueSwitcher
+                  leagueSummaries={leagueSummaries}
+                  leagueSummariesLoading={leagueSummariesLoading}
+                  activeLeagueId={activeLeagueId}
+                  switchLeague={switchLeague}
+                  createLeague={createLeague}
                 />
 
                 <TabNav
@@ -1520,6 +1706,106 @@ function LeagueInfo({ leagueName, activeLeagueId, memberCount, inviteUrl, canAdm
             招待URLの共有は管理者のみ可能です。
           </div>
         )}
+      </div>
+    </Card>
+  );
+}
+
+function LeagueSwitcher({
+  leagueSummaries,
+  leagueSummariesLoading,
+  activeLeagueId,
+  switchLeague,
+  createLeague,
+}) {
+  const [newLeagueName, setNewLeagueName] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  async function handleCreateLeague() {
+    const cleanName = newLeagueName.trim();
+
+    if (!cleanName) {
+      alert("リーグ名を入力してください。");
+      return;
+    }
+
+    try {
+      setCreating(true);
+      await createLeague(cleanName);
+      setNewLeagueName("");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <Card>
+      <Label>リーグ切替</Label>
+
+      {leagueSummariesLoading ? (
+        <p style={centerSmallMutedStyle}>参加リーグを読み込み中...</p>
+      ) : leagueSummaries.length === 0 ? (
+        <p style={centerSmallMutedStyle}>参加中のリーグはまだありません。</p>
+      ) : (
+        <div style={{ display: "grid", gap: 8 }}>
+          {leagueSummaries.map((league) => {
+            const active = league.id === activeLeagueId;
+
+            return (
+              <button
+                key={league.id}
+                onClick={() => switchLeague(league.id)}
+                disabled={active}
+                style={{
+                  width: "100%",
+                  textAlign: "left",
+                  padding: 10,
+                  borderRadius: 10,
+                  border: `1px solid ${active ? C.gold : C.border}`,
+                  background: active ? "#20180a" : C.panel,
+                  color: active ? C.gold : C.text,
+                  cursor: active ? "default" : "pointer",
+                }}
+              >
+                <div style={{ fontWeight: 700 }}>
+                  {active ? "現在：" : ""}
+                  {league.name}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
+                  メンバー {league.memberCount}人
+                  {league.isOwner ? " / 作成者" : league.isAdmin ? " / 管理者" : ""}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div
+        style={{
+          borderTop: `1px solid ${C.border}`,
+          marginTop: 12,
+          paddingTop: 12,
+        }}
+      >
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>
+          新しいリーグを作成
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            value={newLeagueName}
+            onChange={(e) => setNewLeagueName(e.target.value)}
+            placeholder="例：週末麻雀会"
+            style={inputStyle}
+          />
+          <button
+            onClick={handleCreateLeague}
+            disabled={creating}
+            style={smallGoldButtonStyle}
+          >
+            {creating ? "作成中" : "作成"}
+          </button>
+        </div>
       </div>
     </Card>
   );
